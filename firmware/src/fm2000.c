@@ -10,7 +10,7 @@
  *   KNOB 1       the riff that starts at the cursor (0 = none)
  *   KNOB 2       the loop: clockwise on (from the cursor's bar), anticlockwise off
  *   KNOB 3       the loop's length, 1..32 bars
- *   KNOB 4       free (the tempo will live on SNG)
+ *   KNOB 4       zoom: anticlockwise 0.5x (16 bars in view), clockwise back to 1x from the cursor's bar
  *   PLAY         play the song from the cursor's bar / stop; REC arms (recording: not yet)
  *   GLO          the metronome on / off (for now)
  *   keys         play the track's sound; OCT- OCT+ the octave
@@ -389,8 +389,8 @@ static const uint16_t RIFF_D[8] = {RGB(70, 55, 105), RGB(35, 80, 76), RGB(96, 76
 #define LANE_H 46
 #define FOOT_Y 220
 #define GX 40                                   /* the lanes start right of the track labels */
-#define BW 25                                   /* a bar's width: 8 bars across 200 px */
-#define COLS 8
+#define BW ((int32_t)(ui.zoom ? 12 : 25))       /* a bar's width: 8 bars across 200 px (1x), or 16 (0.5x) */
+#define COLS (ui.zoom ? 16u : 8u)
 
 static struct {
     uint32_t bar, trk, left, oct;               /* the cursor, the first bar shown, the keys' octave (0..4) */
@@ -398,6 +398,7 @@ static struct {
     uint8_t held[27];
     uint32_t drawn_pos;                         /* the playhead drawn (a step, or ~0) */
     uint32_t rec;                               /* REC armed (recording itself: not yet) */
+    uint32_t zoom;                              /* 0: 1x (8 bars), 1: 0.5x (16 bars) */
     uint32_t loop_len;                          /* the loop's length in bars: 4 each time it is switched on */
     uint32_t msg_until;                         /* the footer shows ui.msg until then (fm1_ms) */
     char msg[24];
@@ -496,11 +497,47 @@ static void draw_ruler(void)
         num[len] = 0;
         if (bar == ui.bar) cv_rect(x, 0, BW, RULER_H, C_LOW);
         cv_rect(x, RULER_H - (bar % 4u ? 3 : 6), 1, bar % 4u ? 3 : 6, bar % 4u ? C_LOW : C_MID);
-        cv_text_on(x + 3, 0, &FONT_S, num, bar == ui.bar ? C_WHITE : bar % 4u ? C_MID : C_TXT, bar == ui.bar ? C_LOW : C_BLACK);
+        if (!ui.zoom || !(bar % 4u) || bar == ui.bar)
+            cv_text_on(x + (ui.zoom ? 2 : 3), 0, &FONT_S, num, bar == ui.bar ? C_WHITE : bar % 4u ? C_MID : C_TXT,
+                       bar == ui.bar ? C_LOW : C_BLACK);
         if (song.loop_end > song.loop_start && bar >= song.loop_start && bar < song.loop_end)
             cv_rect(x, 0, BW, 2, C_ACC);        /* the loop: a line over its bars */
     }
     cv_blit(0, RULER_Y);
+}
+
+/* a riff's notes inside its block, as a DAW shows a clip: time across, pitch up, the riff's own range filling the
+ * block's height. off = the riff's step at x, vis bars of it in view, w px wide */
+static void draw_notes(uint32_t t, const song_riff_t *f, uint32_t off, int32_t x, uint32_t vis, int32_t w, uint16_t ink)
+{
+    const int32_t top = 7, h = LANE_H - 15;     /* the area inside the block */
+    uint32_t i, lo = 127, hi = 0, end = off + vis * STEPS_PER_BAR;
+    int32_t range, nh;
+    (void)t;
+    for (i = f->first; i < (uint32_t)f->first + f->count; i++) {
+        if (song.ev[i].note < lo) lo = song.ev[i].note;
+        if (song.ev[i].note > hi) hi = song.ev[i].note;
+    }
+    if (!f->count) return;
+    range = (int32_t)(hi - lo);
+    nh = range <= 6 ? 4 : range <= 12 ? 3 : 2;
+    if (range < 4) range = 4;                   /* a few notes do not fill the block from edge to edge */
+    for (i = f->first; i < (uint32_t)f->first + f->count; i++) {
+        const song_ev_t *e = &song.ev[i];
+        uint32_t s = e->start, n = (uint32_t)e->start + e->len;
+        int32_t x0, x1, y;
+        if (n > f->steps) n = f->steps;
+        if (n <= off || s >= end) continue;     /* outside the view */
+        if (s < off) s = off;
+        if (n > end) n = end;
+        x0 = x + (int32_t)((s - off) * (uint32_t)BW / STEPS_PER_BAR);
+        x1 = x + (int32_t)((n - off) * (uint32_t)BW / STEPS_PER_BAR);
+        if (x1 > x + w) x1 = x + w;
+        if (x1 - x0 > 2) x1--;                  /* a gap between notes that follow each other */
+        if (x1 <= x0) x1 = x0 + 1;
+        y = top + (int32_t)((range - (int32_t)(e->note - lo) - (range - (int32_t)(hi - lo)) / 2) * (h - nh) / range);
+        cv_rect(x0, y, x1 - x0, nh, ink);
+    }
 }
 
 static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and its riffs; pos = the playhead step */
@@ -530,24 +567,14 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
         {
             const song_riff_t *f = &song.riff[t][r - 1u];
             uint16_t col = RIFF_C[f->color & 7u], dark = RIFF_D[f->color & 7u];
-            char s[RIFF_NAME + 1];
             end = b0 + riff_bars(f);
             for (k = b0 + 1u; k < end && k < SONG_BARS; k++)   /* cut by the next riff on the track */
                 if (song.cell[k][t]) { end = k; break; }
             vis = (end < ui.left + COLS ? end : ui.left + COLS) - bar;   /* bars of it in view from here */
             w = (int32_t)(vis * BW) - 2;
             cv_rect(x + (bar == b0 ? 1 : 0), 3, w - (bar == b0 ? 1 : 0), LANE_H - 6, col);
-            for (k = 1; k < vis; k++)           /* the bars inside it, faintly */
-                cv_rect(x + (int32_t)(k * BW), LANE_H - 9, 1, 5, dark);
             if (bar == b0) cv_rect(x + 1, 3, 2, LANE_H - 6, dark);
-            copy_str(s, f->name, RIFF_NAME);
-            if (text_w(&FONT_S, s) > w - 8) { put_num(s, r, 2); s[2] = 0; }   /* too narrow for the name: the number */
-            cv_text_on(x + 5, 5, &FONT_S, s, C_BLACK, col);
-            if (bar == b0) {                    /* its length, under the name */
-                put_num(s, f->steps, 2);
-                s[2] = 0;
-                cv_text_on(x + 5, 25, &FONT_S, s, dark, col);
-            }
+            draw_notes(t, f, (bar - b0) * STEPS_PER_BAR, x, vis, w, dark);
             c += vis;
         }
     }
@@ -694,7 +721,17 @@ static void app_step(void)
         say_loop();
         ui.dirty |= D_RULER;
     }
-    fm1_enc_take(ENC_KNOB4);                            /* KNOB 4: free for now */
+    if ((d = fm1_enc_take(ENC_KNOB4)) != 0) {           /* zoom: anticlockwise 0.5x (16 bars), clockwise 1x */
+        uint32_t z = d < 0;
+        if (z != ui.zoom) {
+            ui.zoom = z;
+            if (z) ui.left = ui.bar >= 8u ? ui.bar - 8u : 0u;   /* out: the cursor in the middle */
+            else ui.left = ui.bar;              /* back in: from where the cursor is */
+            if (ui.left > SONG_BARS - COLS) ui.left = SONG_BARS - COLS;
+            say(z ? "ZOOM 0.5X" : "ZOOM 1X");
+            ui.dirty |= D_RULER | D_LANES;
+        }
+    }
 
     b = fm1_input_edges(&rel);
     if (b & (1u << BTN_REC)) { ui.rec = !ui.rec; ui.dirty |= D_HEAD; }

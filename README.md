@@ -18,7 +18,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 - **Arrangement:** the song is a timeline of up to 128 bars. Put a riff on a bar and it plays through its length,
   until the next riff on that track starts.
 - **One screen, the whole song:** time runs left to right, the four tracks one under the other, every riff a
-  coloured block with its name.
+  coloured block with its notes drawn in it, as a DAW shows a clip.
 
 ## What works now
 
@@ -48,7 +48,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 | KNOB 1 | the riff placed on the bar (or none) | Shift ↑ ↓ |
 | KNOB 2 | the loop: clockwise on (4 bars from the cursor's bar), anticlockwise off | P |
 | KNOB 3 | the loop's length, 1-32 bars | A / G |
-| KNOB 4 | free for now | |
+| KNOB 4 | zoom: anticlockwise 0.5x (16 bars), clockwise 1x from the cursor | K |
 | PLAY | play from the cursor / stop | Space |
 | GLO | the metronome (for now) | 6 |
 | keys | play the track's sound; OCT− OCT+ the octave | Z…/ and Q…O rows, [ ] |
