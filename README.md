@@ -24,7 +24,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 
 - The song model: tracks, riffs, notes, the arrangement, packing a song for the flash (tested: `tests/test_song.c`)
 - The ARR (arrangement) screen: cursor, scrolling, placing riffs, the playhead
-- Playback from the cursor, a loop of 1 to 32 bars, a metronome, the tempo
+- Playback from the cursor, a loop of 1 to 32 bars, a metronome
 - A simple synth: one engine (BASIC, 7 presets) for tracks 1-3, three drum kits for track 4
 - A test song to play with
 - The simulator: the firmware's own C code compiled to WebAssembly, on a drawn FM-1 panel
@@ -46,9 +46,9 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 | SELECT | the bar | ← → |
 | PRESETS | the track's sound, or the drum kit on track 4 | Shift ← → |
 | KNOB 1 | the riff placed on the bar (or none) | Shift ↑ ↓ |
-| KNOB 2 | the loop: clockwise on (from the cursor's bar), anticlockwise off | P |
+| KNOB 2 | the loop: clockwise on (4 bars from the cursor's bar), anticlockwise off | P |
 | KNOB 3 | the loop's length, 1-32 bars | A / G |
-| KNOB 4 | the tempo | keypad − + |
+| KNOB 4 | free for now | |
 | PLAY | play from the cursor / stop | Space |
 | GLO | the metronome (for now) | 6 |
 | keys | play the track's sound; OCT− OCT+ the octave | Z…/ and Q…O rows, [ ] |

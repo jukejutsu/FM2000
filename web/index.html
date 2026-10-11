@@ -63,9 +63,8 @@ footer { margin-top: 18px; font-size: 12px; color: var(--dim); text-align: cente
   <div><b>SELECT</b><span>bar · <kbd>←</kbd> <kbd>→</kbd></span></div>
   <div><b>PRESETS</b><span>the track's sound / drum kit · <kbd>Shift</kbd> <kbd>←</kbd> <kbd>→</kbd></span></div>
   <div><b>KNOB 1</b><span>riff at the cursor · <kbd>Shift</kbd> <kbd>↑</kbd> <kbd>↓</kbd></span></div>
-  <div><b>KNOB 4</b><span>tempo · <kbd>-</kbd> <kbd>+</kbd> on the keypad</span></div>
   <div><b>PLAY</b><span>play from the cursor / stop · <kbd>Space</kbd></span></div>
-  <div><b>KNOB 2</b><span>loop on (from the cursor) / off · <kbd>P</kbd></span></div>
+  <div><b>KNOB 2</b><span>loop on (4 bars from the cursor) / off · <kbd>P</kbd></span></div>
   <div><b>KNOB 3</b><span>loop length · <kbd>A</kbd> <kbd>G</kbd></span></div>
   <div><b>GLO</b><span>metronome on / off (for now) · <kbd>6</kbd></span></div>
   <div><b>REC</b><span>arm (recording: not yet) · <kbd>=</kbd></span></div>
@@ -293,7 +292,7 @@ build(tall.matches ? "tall" : "wide");
 tall.addEventListener("change", () => build(tall.matches ? "tall" : "wide"));
 
 // the computer keyboard: F3..A#4 on the Z (white) and S (black) rows, B4..G5 on Q..O, the twelve buttons on the
-// number row in the panel's order, [ ] OCT, Space PLAY, arrows ALGORITHM / SELECT, Shift-arrows PRESETS / KNOB 1, keypad -+ KNOB 4
+// number row in the panel's order, [ ] OCT, Space PLAY, arrows ALGORITHM / SELECT, Shift-arrows PRESETS / KNOB 1
 const KEYMAP = {};
 ["KeyZ", "KeyX", "KeyC", "KeyV", "KeyB", "KeyN", "KeyM", "Comma", "Period", "Slash"].forEach((c, i) => KEYMAP[c] = { key: WHITE[i] });
 [["KeyS", 1], ["KeyD", 3], ["KeyF", 5], ["KeyH", 8], ["KeyJ", 10], ["KeyL", 13], ["Semicolon", 15], ["Quote", 17]].forEach(([c, k]) => KEYMAP[c] = { key: k });
@@ -301,8 +300,7 @@ const KEYMAP = {};
 ["Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Digit0", "Minus", "Equal"]
   .forEach((c, i) => KEYMAP[c] = { btn: B[[...ROW1, ...ROW2][i]] });
 Object.assign(KEYMAP, { BracketLeft: { btn: B["OCT-"] }, BracketRight: { btn: B["OCT+"] }, Space: { btn: B.PLAY } });
-const TURNS = { ArrowUp: [EN.ALGORITHM, -1], ArrowDown: [EN.ALGORITHM, 1], ArrowLeft: [EN.SELECT, -1], ArrowRight: [EN.SELECT, 1],
-                NumpadAdd: [EN["KNOB 4"], 1], NumpadSubtract: [EN["KNOB 4"], -1] };
+const TURNS = { ArrowUp: [EN.ALGORITHM, -1], ArrowDown: [EN.ALGORITHM, 1], ArrowLeft: [EN.SELECT, -1], ArrowRight: [EN.SELECT, 1] };
 const LETTER_TURNS = { KeyA: [EN["KNOB 3"], -1], KeyG: [EN["KNOB 3"], 1] };
 const SHIFT_TURNS = { ArrowLeft: [EN.PRESETS, -1], ArrowRight: [EN.PRESETS, 1], ArrowUp: [EN["KNOB 1"], 1], ArrowDown: [EN["KNOB 1"], -1] };
 addEventListener("keydown", (e) => {

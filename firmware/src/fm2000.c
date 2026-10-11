@@ -10,7 +10,7 @@
  *   KNOB 1       the riff that starts at the cursor (0 = none)
  *   KNOB 2       the loop: clockwise on (from the cursor's bar), anticlockwise off
  *   KNOB 3       the loop's length, 1..32 bars
- *   KNOB 4       the tempo
+ *   KNOB 4       free (the tempo will live on SNG)
  *   PLAY         play the song from the cursor's bar / stop; REC arms (recording: not yet)
  *   GLO          the metronome on / off (for now)
  *   keys         play the track's sound; OCT- OCT+ the octave
@@ -398,7 +398,7 @@ static struct {
     uint8_t held[27];
     uint32_t drawn_pos;                         /* the playhead drawn (a step, or ~0) */
     uint32_t rec;                               /* REC armed (recording itself: not yet) */
-    uint32_t loop_len;                          /* the loop's length in bars, kept while the loop is off */
+    uint32_t loop_len;                          /* the loop's length in bars: 4 each time it is switched on */
     uint32_t msg_until;                         /* the footer shows ui.msg until then (fm1_ms) */
     char msg[24];
     uint32_t dirty;
@@ -683,7 +683,7 @@ static void app_step(void)
         ui.dirty |= D_LANES | D_FOOT;
     }
     if ((d = fm1_enc_take(ENC_KNOB2)) != 0) {           /* the loop: clockwise on (from the cursor's bar), back off */
-        if (d > 0 && song.loop_end <= song.loop_start) loop_set(ui.bar, ui.loop_len);
+        if (d > 0 && song.loop_end <= song.loop_start) { ui.loop_len = 4; loop_set(ui.bar, ui.loop_len); }
         else if (d < 0) loop_set(0, 0);
         say_loop();
         ui.dirty |= D_HEAD | D_RULER;
@@ -694,10 +694,7 @@ static void app_step(void)
         say_loop();
         ui.dirty |= D_RULER;
     }
-    if ((d = fm1_enc_take(ENC_KNOB4)) != 0) {           /* the tempo */
-        song.bpm10 = (uint16_t)clamp((int32_t)song.bpm10 + d * 10, 600, 3000);
-        ui.dirty |= D_HEAD;
-    }
+    fm1_enc_take(ENC_KNOB4);                            /* KNOB 4: free for now */
 
     b = fm1_input_edges(&rel);
     if (b & (1u << BTN_REC)) { ui.rec = !ui.rec; ui.dirty |= D_HEAD; }
