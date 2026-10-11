@@ -8,9 +8,10 @@
  *   SELECT       the bar under the cursor, clockwise: right (later in the song)
  *   PRESETS      the track's sound: tracks 1-3 a preset of their engine, track 4 (the drums) a kit
  *   KNOB 1       the riff that starts at the cursor (0 = none)
+ *   KNOB 2       the loop: clockwise on (from the cursor's bar), anticlockwise off
+ *   KNOB 3       the loop's length, 1..32 bars
  *   KNOB 4       the tempo
  *   PLAY         play the song from the cursor's bar / stop; REC arms (recording: not yet)
- *   LFO          the loop on / off: the riff under the cursor, or 4 bars from it (for now: it will move to a layer)
  *   GLO          the metronome on / off (for now)
  *   keys         play the track's sound; OCT- OCT+ the octave
  *
@@ -397,6 +398,9 @@ static struct {
     uint8_t held[27];
     uint32_t drawn_pos;                         /* the playhead drawn (a step, or ~0) */
     uint32_t rec;                               /* REC armed (recording itself: not yet) */
+    uint32_t loop_len;                          /* the loop's length in bars, kept while the loop is off */
+    uint32_t msg_until;                         /* the footer shows ui.msg until then (fm1_ms) */
+    char msg[24];
     uint32_t dirty;
 } ui;
 enum { D_HEAD = 1, D_RULER = 2, D_LANES = 4, D_FOOT = 8, D_ALL = 15 };
@@ -462,19 +466,18 @@ static void cv_icon(int32_t x, int32_t y, const char *const *rows, uint16_t c)
 static void draw_head(const char *screen)
 {
     char bpm[8] = "000.0";
-    int32_t x, w;
+    const char *v;
+    int32_t x = (240 - (4 * 11 + 3 * 8)) / 2;   /* the four icons, 8 px apart, in the middle */
     put_num(bpm, song.bpm10 / 10u, 3);
     bpm[4] = (char)('0' + song.bpm10 % 10u);
     cv_begin(240, HEAD_H, C_BG);
-    x = cv_text_on(6, 1, &FONT_M, screen, C_ACC, C_BG) + 10;
+    cv_text_on(6, 1, &FONT_M, screen, C_ACC, C_BG);
     cv_icon(x, 4, ICON_PLAY, seq_play ? C_PLAY : C_LOW);
     cv_icon(x + 19, 4, ICON_REC, ui.rec ? RGB(255, 80, 70) : C_LOW);
     cv_icon(x + 38, 4, ICON_LOOP, song.loop_end > song.loop_start ? C_ACC : C_LOW);
     cv_icon(x + 57, 4, ICON_METRO, seq_click ? RGB(240, 190, 80) : C_LOW);
-    w = text_w(&FONT_S, "BPM");
-    cv_text_on(240 - 6 - w, 3, &FONT_S, "BPM", C_MID, C_BG);
-    cv_text_on(240 - 6 - w - 4 - text_w(&FONT_M, bpm[0] == '0' ? bpm + 1 : bpm), 1, &FONT_M,
-            bpm[0] == '0' ? bpm + 1 : bpm, C_TXT, C_BG);
+    v = bpm[0] == '0' ? bpm + 1 : bpm;          /* the tempo, right */
+    cv_text_on(240 - 6 - text_w(&FONT_M, v), 1, &FONT_M, v, C_TXT, C_BG);
     cv_blit(0, 0);
 }
 
@@ -565,6 +568,11 @@ static void draw_foot(void)
     char s[32];
     uint32_t b0 = 0, r = song_at(&song, ui.bar, ui.trk, &b0), n;
     cv_begin(240, 20, C_BG);
+    if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0) {   /* a short message after a change */
+        cv_text_on(6, 2, &FONT_S, ui.msg, C_WHITE, C_BG);
+        cv_blit(0, FOOT_Y);
+        return;
+    }
     n = copy_str(s, sound_name(ui.trk), 9);     /* the track's sound, left */
     cv_text_on(6, 2, &FONT_S, s, ui.trk == SONG_DRUM_TRACK ? RIFF_C[2] : C_ACC, C_BG);
     if (r) {                                    /* the riff under the cursor, right */
@@ -581,6 +589,42 @@ static void draw_foot(void)
 }
 
 /* ================================================================== the main loop */
+static void say(const char *s)                  /* a message in the footer for 1.5 s */
+{
+    copy_str(ui.msg, s, sizeof ui.msg - 1u);
+    ui.msg_until = fm1_ms + 1500u;
+    if (!ui.msg_until) ui.msg_until = 1;
+    ui.dirty |= D_FOOT;
+}
+static uint32_t put_dec(char *p, uint32_t v)    /* v in decimal, no padding: the length */
+{
+    uint32_t n = v >= 100u ? 3u : v >= 10u ? 2u : 1u;
+    put_num(p, v, n);
+    return n;
+}
+static void say_loop(void)                      /* "LOOP 5-8  4 BARS" or "LOOP OFF  4 BARS" */
+{
+    char s[24];
+    uint32_t n = copy_str(s, "LOOP ", 8);
+    if (song.loop_end > song.loop_start) {
+        n += put_dec(s + n, song.loop_start + 1u);
+        s[n++] = '-';
+        n += put_dec(s + n, song.loop_end);
+    } else
+        n += copy_str(s + n, "OFF", 4);
+    s[n++] = ' '; s[n++] = ' ';
+    n += put_dec(s + n, ui.loop_len);
+    copy_str(s + n, ui.loop_len == 1u ? " BAR" : " BARS", 6);
+    say(s);
+}
+static void loop_set(uint32_t start, uint32_t len)   /* len 0 = off */
+{
+    if (!len) { song.loop_start = song.loop_end = 0; return; }
+    if (start + len > SONG_BARS) start = SONG_BARS - len;
+    song.loop_start = (uint8_t)start;
+    song.loop_end = (uint8_t)(start + len);
+}
+
 static void scroll_to(uint32_t bar)
 {
     if (bar < ui.left) ui.left = bar;
@@ -604,6 +648,7 @@ static void app_init(void)
     test_song();
     seq_bars = song_bars(&song);
     ui.oct = 2;
+    ui.loop_len = 4;
     ui.drawn_pos = ~0u;
     ui.dirty = D_ALL;
     lcd_fill(0, 0, 240, 240, C_BLACK);
@@ -637,6 +682,18 @@ static void app_step(void)
         seq_bars = song_bars(&song);
         ui.dirty |= D_LANES | D_FOOT;
     }
+    if ((d = fm1_enc_take(ENC_KNOB2)) != 0) {           /* the loop: clockwise on (from the cursor's bar), back off */
+        if (d > 0 && song.loop_end <= song.loop_start) loop_set(ui.bar, ui.loop_len);
+        else if (d < 0) loop_set(0, 0);
+        say_loop();
+        ui.dirty |= D_HEAD | D_RULER;
+    }
+    if ((d = fm1_enc_take(ENC_KNOB3)) != 0) {           /* the loop's length, 1..32 bars */
+        ui.loop_len = (uint32_t)clamp((int32_t)ui.loop_len + d, 1, 32);
+        if (song.loop_end > song.loop_start) loop_set(song.loop_start, ui.loop_len);
+        say_loop();
+        ui.dirty |= D_RULER;
+    }
     if ((d = fm1_enc_take(ENC_KNOB4)) != 0) {           /* the tempo */
         song.bpm10 = (uint16_t)clamp((int32_t)song.bpm10 + d * 10, 600, 3000);
         ui.dirty |= D_HEAD;
@@ -644,19 +701,6 @@ static void app_step(void)
 
     b = fm1_input_edges(&rel);
     if (b & (1u << BTN_REC)) { ui.rec = !ui.rec; ui.dirty |= D_HEAD; }
-    if (b & (1u << BTN_LFO)) {                  /* the loop (for now on LFO): the riff under the cursor, or 4 bars */
-        if (song.loop_end > song.loop_start) song.loop_start = song.loop_end = 0;
-        else {
-            uint32_t b0 = ui.bar, r = song_at(&song, ui.bar, ui.trk, &b0), end = b0 + 4u, k;
-            if (r) {
-                end = b0 + riff_bars(&song.riff[ui.trk][r - 1u]);
-                for (k = b0 + 1u; k < end; k++) if (song.cell[k][ui.trk]) { end = k; break; }
-            }
-            song.loop_start = (uint8_t)b0;
-            song.loop_end = (uint8_t)(end > SONG_BARS ? SONG_BARS : end);
-        }
-        ui.dirty |= D_HEAD | D_RULER;
-    }
     if (b & (1u << BTN_GLO)) { seq_click = !seq_click; ui.dirty |= D_HEAD; }   /* the metronome (for now on GLO) */
     if (b & (1u << BTN_PLAY)) {
         if (!seq_play) {
@@ -693,7 +737,6 @@ static void app_step(void)
 
     fm1_led_key(BTN_PLAY, seq_play != 0);
     fm1_led_key(BTN_REC, ui.rec != 0);
-    fm1_led_key(BTN_LFO, song.loop_end > song.loop_start);
     fm1_led_key(BTN_GLO, seq_click != 0);
     fm1_led_key(BTN_OCT_DOWN, ui.oct < 2u);
     fm1_led_key(BTN_OCT_UP, ui.oct > 2u);
@@ -715,6 +758,7 @@ static void app_step(void)
     if (ui.dirty & D_HEAD) draw_head("ARR");
     if (ui.dirty & D_RULER) draw_ruler();
     if (ui.dirty & D_LANES) for (k = 0; k < SONG_TRACKS; k++) draw_lane(k, pos);
+    if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) <= 0) { ui.msg_until = 0; ui.dirty |= D_FOOT; }
     if (ui.dirty & D_FOOT) draw_foot();
     ui.dirty = 0;
 }
