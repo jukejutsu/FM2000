@@ -1,126 +1,98 @@
 # FM2000
 
-**A Music 2000-style song maker for the M-VAVE FM-1:** four tracks (three synths and the drums), a pool of riffs per
-track (up to 64 steps, with chords and note lengths), and the song as a timeline of bars you place riffs onto. Built on Dinghy (below).
+**A song maker for the M-VAVE FM-1, after Music 2000 on the PlayStation.** Write short riffs, place them on a
+timeline of bars, build a whole track on the device: arrangement first, the way a DAW works, not a pattern
+looper.
 
-> **Status: prototype.** The song model (`firmware/src/song.h`, tested in `tests/test_song.c`), a test song, a simple
-> synth and the ARRANGE screen, running in the simulator and on the host. Not yet tried on an FM-1.
+> 🚧 **Work in progress.** FM2000 is an early prototype. It runs in the browser simulator and on a computer; it has
+> not been built or tried on an FM-1 yet. Things change daily, saved songs are not kept yet, and there is no release.
+> Do not install it on your FM-1 for now.
 
-```
-firmware/src/song.h       the song model: tracks, riffs, notes, the arrangement grid, pack / unpack
-firmware/src/fm2000.c     the app: ARRANGE screen, sequencer, synth (app_init / app_step / app_audio)
-web/                      the simulator: the same C compiled to WebAssembly, on a drawn FM-1
-sim/                      the simulator, built (web/build.sh): open with web/serve.sh, or publish with GitHub Pages
-tests/run_tests.sh        the model's tests, the host run, the simulator headless
-```
+## The idea
 
-**Simulator:** `web/serve.sh`, then http://localhost:8000. After a change: `web/build.sh` (needs clang with wasm32
-and lld: on macOS `brew install llvm lld`). Time runs left to right. ↑↓ (ALGORITHM) the track, ←→ (SELECT) the bar, Shift-←→ (PRESETS) the track's sound or drum kit,
-Shift-↑↓ (KNOB 1) the riff at the cursor, Space plays. Tracks 1-3 take sound engines (one so far, BASIC); track 4 is the drums.
+Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for writing a song from start to end.
 
-**Song model in short:** `cell[bar][track]` starts a riff (1..32) or is empty; a riff plays on through its length
-(64 steps = 4 bars) unless the next one starts first. Every note of every riff lives in one 4096-note pool. A song
-packs to a few KB (`song_pack` / `song_unpack`, with a CRC) for the flash.
+- **Four tracks:** three synth tracks, each with its own sound engine, and a drum track.
+- **Riffs:** each track has a pool of up to 32 riffs, 1 to 64 steps long (a 1/16 step, up to 4 bars), with chords
+  and note lengths: a small piano roll each, not a step pattern.
+- **Arrangement:** the song is a timeline of up to 128 bars. Put a riff on a bar and it plays through its length,
+  until the next riff on that track starts.
+- **One screen, the whole song:** time runs left to right, the four tracks one under the other, every riff a
+  coloured block with its name.
 
----
+## What works now
 
-<p align="center"><img src="assets/logo.svg" width="96" alt="Dinghy"></p>
+- The song model: tracks, riffs, notes, the arrangement, packing a song for the flash (tested: `tests/test_song.c`)
+- The ARR (arrangement) screen: cursor, scrolling, placing riffs, the playhead
+- Playback from the cursor, a loop of 1 to 32 bars, a metronome, the tempo
+- A simple synth: one engine (BASIC, 7 presets) for tracks 1-3, three drum kits for track 4
+- A test song to play with
+- The simulator: the firmware's own C code compiled to WebAssembly, on a drawn FM-1 panel
 
-# Dinghy
+## Planned
 
-**The smallest firmware for the M-VAVE FM-1 to build your own on.**
+- RIF: the riff editor (notes on a piano roll, the drum grid), entered from a block on ARR
+- Recording riffs from the keys, quantised
+- Saving songs to the flash
+- Real sound engines for tracks 1-3 (from the Felucca family) and better drum kits
+- MIX, SND (sound editing), SNG (song settings) screens
+- A build for the FM-1 and the first tests on the device
 
-Dinghy plays a sine wave on the keys, and that is all it does. Under it is everything an FM-1 firmware needs
-before it can be any fun: the update path, the USB rescue, USB-MIDI, USB audio, the keys, knobs and LEDs, the
-screen and a place to keep settings. It all works, so you start with the part you actually want to write.
+## Controls (ARR screen)
 
-```
-firmware/src/dinghy.c     <- your firmware: ~200 lines, a 4-voice sine. Start here.
-firmware/src/platform.c   <- the plumbing (boot, USB, updates, audio ISR, settings). Done; read it, don't fight it.
-firmware/src/*.c, hal/    <- Felucca's platform, as SLOOP carries it, unchanged
-```
+| Control | Does | In the simulator |
+| --- | --- | --- |
+| ALGORITHM | the track | ↑ ↓ |
+| SELECT | the bar | ← → |
+| PRESETS | the track's sound, or the drum kit on track 4 | Shift ← → |
+| KNOB 1 | the riff placed on the bar (or none) | Shift ↑ ↓ |
+| KNOB 2 | the loop: clockwise on (from the cursor's bar), anticlockwise off | P |
+| KNOB 3 | the loop's length, 1-32 bars | A / G |
+| KNOB 4 | the tempo | keypad − + |
+| PLAY | play from the cursor / stop | Space |
+| GLO | the metronome (for now) | 6 |
+| keys | play the track's sound; OCT− OCT+ the octave | Z…/ and Q…O rows, [ ] |
 
-Dinghy is based on [Felucca](https://github.com/hugelton/Felucca) by Leo Kuroshita (Hügelton Instruments), with its
-platform as [SLOOP](https://github.com/isod89/sloop-fm1) (isod89) carries it: it keeps that platform and throws away the
-rest. The smallest boat of the family, after the felucca and the sloop.
+## Try it
 
-<p align="center"><img src="docs/screen.png" width="240" alt="Dinghy's screen: the name, the note played, a keyboard with the keys that sound"></p>
-
-> **Status: 0.1, runs on the FM-1.** Tested on the device: the install, MIDI in (pitch exact, 4 voices), USB audio
-> at 44.1 / 48 kHz, the keys, the screen, the octave kept in flash, and back to another firmware through the hub.
-
-## What you get
-
-| | |
-| --- | --- |
-| **Updates that always work** | `tools/fm1_install.py`, the web installers and the [FM-1 Firmware Hub](https://fm1.designburgapps.com) reach your firmware over USB, so you (and your users) can always install the next build, or go back to the official firmware. |
-| **USB rescue** | Hold **OCT-** while switching on: no sound, only the updater. If your firmware crashes twice at boot, the FM-1 goes there by itself. |
-| **USB-MIDI** | In and out, class compliant: `midi_get()`, `midi_send()`. |
-| **USB audio** | The FM-1 shows up as a 16-bit stereo audio input (44.1 or 48 kHz): record it into any DAW or phone. Nothing to do. |
-| **Panel** | 27 keys, 14 buttons, 7 encoders, the MASTER knob, the LEDs, by name (`BTN_PLAY`, `ENC_KNOB1`, ...). |
-| **Screen** | 240 x 240, text in two sizes, rectangles, lines, pixels. |
-| **Settings** | `settings_load()` / `settings_save()`: up to 256 bytes with a CRC in their own flash sector. |
-| **A crash screen** | A fault shows where it happened (the PC), then the FM-1 restarts. |
-| **Host mode** | The same `dinghy.c` on your computer: the screen as an image, the sound as a WAV. No FM-1 needed to try an idea. |
-| **Checks** | The build fails on what bricks or breaks an FM-1 firmware: a 64-bit division, a call into the chip ROM, too much RAM, a register touched outside `hal/`. |
-
-## Quick start
-
-You need Linux on x86-64 (or macOS / Windows with Docker or WSL), Python 3 with Pillow, the JieLi toolchain
-and three files of the JieLi AC79 SDK. Once:
+The simulator runs the same code the FM-1 will run.
 
 ```sh
-pip3 install Pillow
-tools/get_toolchain.sh                      # JieLi's clang for the chip, to ~/.jieli/toolchain
-git clone --depth 1 --branch AC79NN_SDK_V1.2.1_2023-12-13 \
-    https://gitee.com/Jieli-Tech/fw-AC79_AIoT_SDK.git ~/fw-AC79_AIoT_SDK
+sh web/serve.sh          # then open http://localhost:8000 and press "Switch on"
 ```
 
-Then:
+After changing the code, rebuild it with `sh web/build.sh` (needs clang with the wasm32 target and lld; on macOS
+`brew install llvm lld`). `tests/run_tests.sh` runs the model's tests, the host build and the simulator headless.
 
-```sh
-./build.sh                                  # -> build/dinghy.fwsc
-tests/run_host.sh                           # -> build/host/dinghy.wav and screen PNGs, no FM-1 needed
+## Inside
+
+```
+firmware/src/song.h       the song model: tracks, riffs, notes, the arrangement, pack / unpack
+firmware/src/fm2000.c     the app: the ARR screen, the sequencer, the synth
+firmware/src/platform.c   the FM-1 platform (boot, USB, updates, audio, panel, screen, settings), from Dinghy
+web/                      the simulator's sources: the browser platform, the page, the audio worklet
+sim/                      the simulator, built
+tests/                    the model's tests and the host run
+tools/                    the build, the installer, the font generator
 ```
 
-On macOS the build runs the toolchain in a `linux/amd64` Docker container by itself (have Docker running).
-`JIELI_TOOLCHAIN` and `AC79_SDK` point elsewhere if your copies live somewhere else.
+The song model in short: `cell[bar][track]` starts a riff (1..32) or is empty; a riff plays on through its length
+unless the next one starts first. Every note of every riff lives in one shared pool of 4096 notes. A song packs to a
+few KB with a CRC.
 
-**Install** your build over USB from the command line (once: `pip3 install mido python-rtmidi`):
+The chip has no FPU: everything is integer arithmetic (see `docs/RULES.md`, and `docs/API.md` for the platform).
 
-```sh
-python3 tools/fm1_install.py build/dinghy.fwsc   # asks before it writes; restarts the FM-1 into Dinghy
-python3 tools/fm1_install.py --info              # what runs on the connected FM-1
-```
+## Credits
 
-Back to another firmware, or to the official one, with the [FM-1 Firmware Hub](https://fm1.designburgapps.com)
-in Chrome or Edge: Dinghy answers the hub's updater like every firmware there. Installing firmware is at your own
-risk.
-
-## Your first change
-
-Open [firmware/src/dinghy.c](firmware/src/dinghy.c). The sound is `app_audio()`: it gets an empty buffer of
-stereo frames and adds to it. Make the sine a square:
-
-```c
-s = ((int32_t)ph < 0 ? 8000 : -8000) * amp >> 15;     /* instead of s = (sine(ph) * amp) >> 15; */
-```
-
-`tests/run_host.sh` and listen to `build/host/dinghy.wav`. Then `./build.sh` and install. That is the whole loop.
-
-## Where to go next
-
-- **[docs/API.md](docs/API.md)**: everything `platform.c` gives you, with the panel's ids, the screen calls, the
-  audio contract, MIDI, settings, the flash map, timing.
-- **[docs/MAKE-IT-YOURS.md](docs/MAKE-IT-YOURS.md)**: turn Dinghy into your firmware: the name, the package
-  identity, releases, getting into the FM-1 Firmware Hub.
-- **[docs/RULES.md](docs/RULES.md)**: the chip's rules (no FPU, no libgcc, the audio ISR's budget) and what the build
-  checks for you. Read it before your first crash, not after.
+- [Dinghy](https://github.com/zvenson/dinghy) by zvenson: the starting point, the minimal FM-1 firmware this is built on
+- [Felucca](https://github.com/hugelton/Felucca) by Leo Kuroshita (Hügelton Instruments): the FM-1 platform, and the
+  browser simulator's design; [SLOOP](https://github.com/isod89/sloop-fm1) by isod89: the platform as it carries it
+- [X0X](https://github.com/charlesvestal/fm1-x0x) by charlesvestal: the first browser build of the family
+- Inter Tight (The Inter Project Authors, SIL OFL 1.1): the UI font
+- Music 2000 (Jester Interactive / Codemasters, 1999) for the idea. FM2000 uses none of its code, graphics or sounds.
 
 ## License
 
-GPL-3.0-only, as Felucca and SLOOP: you may change and share it, and whoever gets your firmware gets its source.
-Details, credits and third-party parts in [LICENSING.md](LICENSING.md).
+GPL-3.0-only, as Felucca, SLOOP and Dinghy. Details and third-party parts in [LICENSING.md](LICENSING.md).
 
-The platform is Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments, with SLOOP's changes (isod89).
-Dinghy (the app, the host mode, the docs) by zvenson.
+M-VAVE and FM-1 are trademarks of their respective owners. FM2000 is not affiliated with or endorsed by them.
