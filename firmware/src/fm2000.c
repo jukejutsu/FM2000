@@ -9,7 +9,9 @@
  *   PRESETS      the track's sound: tracks 1-3 a preset of their engine, track 4 (the drums) a kit
  *   KNOB 1       the riff that starts at the cursor (0 = none)
  *   KNOB 4       the tempo
- *   PLAY         play the song from the cursor's bar / stop
+ *   PLAY         play the song from the cursor's bar / stop; REC arms (recording: not yet)
+ *   LFO          the loop on / off: the riff under the cursor, or 4 bars from it (for now: it will move to a layer)
+ *   GLO          the metronome on / off (for now)
  *   keys         play the track's sound; OCT- OCT+ the octave
  *
  * Tracks 1-3 will choose among sound engines; for now there is one, BASIC (a few waves and an envelope).
@@ -174,8 +176,10 @@ static void ask(uint32_t what, uint32_t trk, uint32_t note, uint32_t vel)
 }
 
 /* the sequencer: an absolute step (bar * 16 + step) and the phase into it (2^32 = one step) */
-static volatile uint32_t seq_play, seq_from, seq_step, seq_bars;
+static volatile uint32_t seq_play, seq_from, seq_step, seq_bars, seq_click;
 static uint32_t seq_ph, seq_was;
+static uint32_t click_ph, click_inc;            /* the metronome: a short blip on each beat, higher on the bar */
+static int32_t click_amp;
 #define STEP_K_Q8 166214u                       /* 2^32 steps x 4 per beat / (600 x 44100) per frame per 0.1 BPM, x 256 */
 
 static void seq_note(void *ctx, uint32_t trk, const song_ev_t *e) { (void)ctx; voice_on(trk, e->note, e->vel, e->len); }
@@ -187,6 +191,11 @@ static void seq_tick(void)
             voice[v].on = 0;
     for (t = 0; t < SONG_TRACKS; t++)
         song_notes_at(&song, t, seq_step, seq_note, 0);
+    if (seq_click && !(seq_step & 3u)) {
+        click_inc = (seq_step & 15u) ? 2000u * HZ_INC : 3000u * HZ_INC;
+        click_amp = (seq_step & 15u) ? 5000 : 7000;
+        click_ph = 0;
+    }
 }
 
 static int32_t sine_ish(uint32_t ph)            /* a parabola sine, Q15 */
@@ -281,6 +290,13 @@ static void app_audio(int32_t *out, uint32_t n)
                 seq_step = st;
                 seq_tick();
             }
+        }
+        if (click_amp) {
+            out[2u * i] += (sine_ish(click_ph) * click_amp) >> 15;
+            out[2u * i + 1u] += (sine_ish(click_ph) * click_amp) >> 15;
+            click_ph += click_inc;
+            if (!(i & 15u)) click_amp -= (click_amp >> 3) + 1;
+            if (click_amp < 0) click_amp = 0;
         }
         if (!(i & 15u))
             for (k = 0; k < NVOICE; k++)
@@ -380,6 +396,7 @@ static struct {
     uint32_t keys_prev;
     uint8_t held[27];
     uint32_t drawn_pos;                         /* the playhead drawn (a step, or ~0) */
+    uint32_t rec;                               /* REC armed (recording itself: not yet) */
     uint32_t dirty;
 } ui;
 enum { D_HEAD = 1, D_RULER = 2, D_LANES = 4, D_FOOT = 8, D_ALL = 15 };
@@ -396,20 +413,68 @@ static uint32_t copy_str(char *d, const char *s, uint32_t max)   /* returns the 
     return i;
 }
 
-static void draw_head(void)
+/* text on a coloured ground: gfx.c's cv_text blends onto black, this blends from `bg` to `c` (black text on a
+ * riff's block would otherwise get dark fringes) */
+static int32_t cv_text_on(int32_t x, int32_t y, const felucca_font_t *f, const char *s, uint16_t c, uint16_t bg)
 {
-    char bpm[12] = "000.0 BPM";
+    uint16_t ramp[16];
+    int32_t r0 = bg >> 11, g0 = (bg >> 5) & 63, b0 = bg & 31, r1 = c >> 11, g1 = (c >> 5) & 63, b1 = c & 31, a;
+    for (a = 0; a < 16; a++)
+        ramp[a] = (uint16_t)(((r0 + (r1 - r0) * a / 15) << 11) | ((g0 + (g1 - g0) * a / 15) << 5) | (b0 + (b1 - b0) * a / 15));
+    for (; *s; s++) {
+        uint32_t gi = glyph(f, (uint8_t)*s), gx, gy, w = f->bw[gi], bpr = (w + 1u) / 2u;
+        const uint8_t *gd = f->data + f->off[gi];
+        for (gy = 0; gy < f->h; gy++)
+            for (gx = 0; gx < w; gx++) {
+                uint32_t v = gd[gy * bpr + gx / 2u];
+                v = (gx & 1u) ? (v & 15u) : (v >> 4);
+                if (v) cv_pset(x - f->pad + (int32_t)gx, y + (int32_t)gy, ramp[v]);
+            }
+        x += f->adv[gi];
+    }
+    return x;
+}
+
+/* the header's icons: 11 x 11, a row a string, '#' = ink */
+static const char *const ICON_PLAY[11] = {
+    "##.........", "####.......", "######.....", "########...", "##########.", "###########",
+    "##########.", "########...", "######.....", "####.......", "##........."};
+static const char *const ICON_REC[11] = {
+    "...#####...", ".#########.", ".#########.", "###########", "###########", "###########",
+    "###########", "###########", ".#########.", ".#########.", "...#####..."};
+static const char *const ICON_LOOP[11] = {
+    "........#..", "..######.#.", ".#.......##", "#........#.", "#.......#..", "#.........#",
+    "..#.......#", ".#........#", "##.......#.", ".#.######..", "..#........"};
+static const char *const ICON_METRO[11] = {
+    "....###...#", "....#.#..#.", "...#...##..", "...#..##...", "..#..##.#..", "..#.##..#..",
+    ".#..#....#.", ".#.#.....#.", "#.........#", "###########", "###########"};
+
+static void cv_icon(int32_t x, int32_t y, const char *const *rows, uint16_t c)
+{
+    int32_t i, j;
+    for (j = 0; j < 11; j++)
+        for (i = 0; i < 11; i++)
+            if (rows[j][i] == '#') cv_pset(x + i, y + j, c);
+}
+
+/* the header: the screen's short name, the transport's state, the tempo. Screen names are short: ARR (the
+ * arrangement), and later RIF (a riff), SND (a sound), MIX, SNG (song settings), SYS */
+static void draw_head(const char *screen)
+{
+    char bpm[8] = "000.0";
+    int32_t x, w;
     put_num(bpm, song.bpm10 / 10u, 3);
     bpm[4] = (char)('0' + song.bpm10 % 10u);
-    if (bpm[0] == '0') bpm[0] = ' ';
     cv_begin(240, HEAD_H, C_BG);
-    cv_text(6, 2, &FONT_S, "FM2000", C_ACC);
-    cv_text(64, 2, &FONT_S, "ARRANGE", C_MID);
-    cv_text(240 - 6 - text_w(&FONT_S, bpm), 2, &FONT_S, bpm, C_TXT);
-    if (seq_play) {
-        int32_t y;
-        for (y = 0; y < 10; y++) cv_rect(136, 5 + y, y < 5 ? y + 1 : 10 - y, 1, C_PLAY);
-    }
+    x = cv_text_on(6, 1, &FONT_M, screen, C_ACC, C_BG) + 10;
+    cv_icon(x, 4, ICON_PLAY, seq_play ? C_PLAY : C_LOW);
+    cv_icon(x + 19, 4, ICON_REC, ui.rec ? RGB(255, 80, 70) : C_LOW);
+    cv_icon(x + 38, 4, ICON_LOOP, song.loop_end > song.loop_start ? C_ACC : C_LOW);
+    cv_icon(x + 57, 4, ICON_METRO, seq_click ? RGB(240, 190, 80) : C_LOW);
+    w = text_w(&FONT_S, "BPM");
+    cv_text_on(240 - 6 - w, 3, &FONT_S, "BPM", C_MID, C_BG);
+    cv_text_on(240 - 6 - w - 4 - text_w(&FONT_M, bpm[0] == '0' ? bpm + 1 : bpm), 1, &FONT_M,
+            bpm[0] == '0' ? bpm + 1 : bpm, C_TXT, C_BG);
     cv_blit(0, 0);
 }
 
@@ -428,7 +493,9 @@ static void draw_ruler(void)
         num[len] = 0;
         if (bar == ui.bar) cv_rect(x, 0, BW, RULER_H, C_LOW);
         cv_rect(x, RULER_H - (bar % 4u ? 3 : 6), 1, bar % 4u ? 3 : 6, bar % 4u ? C_LOW : C_MID);
-        cv_text(x + 2, 0, &FONT_S, num, bar == ui.bar ? C_WHITE : bar % 4u ? C_MID : C_TXT);
+        cv_text_on(x + 3, 0, &FONT_S, num, bar == ui.bar ? C_WHITE : bar % 4u ? C_MID : C_TXT, bar == ui.bar ? C_LOW : C_BLACK);
+        if (song.loop_end > song.loop_start && bar >= song.loop_start && bar < song.loop_end)
+            cv_rect(x, 0, BW, 2, C_ACC);        /* the loop: a line over its bars */
     }
     cv_blit(0, RULER_Y);
 }
@@ -442,10 +509,10 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
     /* the label: the number, the kind, a mark when muted */
     cv_rect(0, 1, GX - 3, LANE_H - 2, sel ? C_LOW : C_BG);
     lab[0] = (char)('1' + t); lab[1] = 0;
-    cv_text(5, 4, &FONT_S, lab, sel ? C_ACC : C_MID);
+    cv_text_on(5, 4, &FONT_S, lab, sel ? C_ACC : C_MID, sel ? C_LOW : C_BG);
     copy_str(kind, t == SONG_DRUM_TRACK ? "DRUM" : sound_name(t), 4);   /* what the track is: its sound, short */
     if (kind[3] == ' ') kind[3] = 0;
-    cv_text(4, 24, &FONT_S, kind, tr->flags & SONG_MUTE ? C_LOW : sel ? C_WHITE : C_TXT);
+    cv_text_on(4, 24, &FONT_S, kind, tr->flags & SONG_MUTE ? C_MID : sel ? C_WHITE : C_TXT, sel ? C_LOW : C_BG);
     /* the bars: empty ones a dot, each riff one block from where it starts (or comes into view) to where it ends */
     for (c = 0; c < COLS;) {
         uint32_t bar = ui.left + c, b0 = 0, r, end, k, vis;
@@ -461,7 +528,6 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
             const song_riff_t *f = &song.riff[t][r - 1u];
             uint16_t col = RIFF_C[f->color & 7u], dark = RIFF_D[f->color & 7u];
             char s[RIFF_NAME + 1];
-            uint32_t room, n;
             end = b0 + riff_bars(f);
             for (k = b0 + 1u; k < end && k < SONG_BARS; k++)   /* cut by the next riff on the track */
                 if (song.cell[k][t]) { end = k; break; }
@@ -471,14 +537,13 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
             for (k = 1; k < vis; k++)           /* the bars inside it, faintly */
                 cv_rect(x + (int32_t)(k * BW), LANE_H - 9, 1, 5, dark);
             if (bar == b0) cv_rect(x + 1, 3, 2, LANE_H - 6, dark);
-            room = (uint32_t)(w - 6) / 8u;
-            n = copy_str(s, f->name, RIFF_NAME);
-            if (n > room) { put_num(s, r, 2); s[2] = 0; }   /* too narrow for the name: the number */
-            cv_text(x + 5, 5, &FONT_S, s, C_BLACK);
+            copy_str(s, f->name, RIFF_NAME);
+            if (text_w(&FONT_S, s) > w - 8) { put_num(s, r, 2); s[2] = 0; }   /* too narrow for the name: the number */
+            cv_text_on(x + 5, 5, &FONT_S, s, C_BLACK, col);
             if (bar == b0) {                    /* its length, under the name */
                 put_num(s, f->steps, 2);
                 s[2] = 0;
-                cv_text(x + 5, 25, &FONT_S, s, dark);
+                cv_text_on(x + 5, 25, &FONT_S, s, dark, col);
             }
             c += vis;
         }
@@ -501,7 +566,7 @@ static void draw_foot(void)
     uint32_t b0 = 0, r = song_at(&song, ui.bar, ui.trk, &b0), n;
     cv_begin(240, 20, C_BG);
     n = copy_str(s, sound_name(ui.trk), 9);     /* the track's sound, left */
-    cv_text(6, 2, &FONT_S, s, ui.trk == SONG_DRUM_TRACK ? RIFF_C[2] : C_ACC);
+    cv_text_on(6, 2, &FONT_S, s, ui.trk == SONG_DRUM_TRACK ? RIFF_C[2] : C_ACC, C_BG);
     if (r) {                                    /* the riff under the cursor, right */
         const song_riff_t *f = &song.riff[ui.trk][r - 1u];
         s[0] = 'R';
@@ -511,7 +576,7 @@ static void draw_foot(void)
         if (b0 != ui.bar) { s[n++] = ' '; s[n++] = '+'; s[n++] = (char)('0' + (ui.bar - b0)); s[n] = 0; }
     } else
         copy_str(s, "--", 3);
-    cv_text(240 - 6 - text_w(&FONT_S, s), 2, &FONT_S, s, C_TXT);
+    cv_text_on(240 - 6 - text_w(&FONT_S, s), 2, &FONT_S, s, C_TXT, C_BG);
     cv_blit(0, FOOT_Y);
 }
 
@@ -578,8 +643,28 @@ static void app_step(void)
     }
 
     b = fm1_input_edges(&rel);
+    if (b & (1u << BTN_REC)) { ui.rec = !ui.rec; ui.dirty |= D_HEAD; }
+    if (b & (1u << BTN_LFO)) {                  /* the loop (for now on LFO): the riff under the cursor, or 4 bars */
+        if (song.loop_end > song.loop_start) song.loop_start = song.loop_end = 0;
+        else {
+            uint32_t b0 = ui.bar, r = song_at(&song, ui.bar, ui.trk, &b0), end = b0 + 4u, k;
+            if (r) {
+                end = b0 + riff_bars(&song.riff[ui.trk][r - 1u]);
+                for (k = b0 + 1u; k < end; k++) if (song.cell[k][ui.trk]) { end = k; break; }
+            }
+            song.loop_start = (uint8_t)b0;
+            song.loop_end = (uint8_t)(end > SONG_BARS ? SONG_BARS : end);
+        }
+        ui.dirty |= D_HEAD | D_RULER;
+    }
+    if (b & (1u << BTN_GLO)) { seq_click = !seq_click; ui.dirty |= D_HEAD; }   /* the metronome (for now on GLO) */
     if (b & (1u << BTN_PLAY)) {
-        if (!seq_play) { seq_bars = song_bars(&song); seq_from = ui.bar < seq_bars ? ui.bar : 0u; }
+        if (!seq_play) {
+            seq_bars = song_bars(&song);
+            seq_from = ui.bar < seq_bars ? ui.bar : 0u;
+            if (song.loop_end > song.loop_start && (seq_from < song.loop_start || seq_from >= song.loop_end))
+                seq_from = song.loop_start;     /* a loop: start in it */
+        }
         seq_play = !seq_play && seq_bars;
         ui.dirty |= D_HEAD | D_LANES;
     }
@@ -607,6 +692,9 @@ static void app_step(void)
     }
 
     fm1_led_key(BTN_PLAY, seq_play != 0);
+    fm1_led_key(BTN_REC, ui.rec != 0);
+    fm1_led_key(BTN_LFO, song.loop_end > song.loop_start);
+    fm1_led_key(BTN_GLO, seq_click != 0);
     fm1_led_key(BTN_OCT_DOWN, ui.oct < 2u);
     fm1_led_key(BTN_OCT_UP, ui.oct > 2u);
     for (k = 0; k < 27u; k++) fm1_led_key(KEY_LED(k), keys >> k & 1u);
@@ -624,7 +712,7 @@ static void app_step(void)
         ui.drawn_pos = pos;
         ui.dirty |= D_LANES;
     }
-    if (ui.dirty & D_HEAD) draw_head();
+    if (ui.dirty & D_HEAD) draw_head("ARR");
     if (ui.dirty & D_RULER) draw_ruler();
     if (ui.dirty & D_LANES) for (k = 0; k < SONG_TRACKS; k++) draw_lane(k, pos);
     if (ui.dirty & D_FOOT) draw_foot();
