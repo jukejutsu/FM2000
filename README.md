@@ -1,3 +1,28 @@
+# FM2000
+
+**A Music 2000-style song maker for the M-VAVE FM-1:** four tracks, a pool of riffs per track (up to 64 steps, with
+chords and note lengths), and the song as a grid of bars you place riffs into. Built on Dinghy (below).
+
+> **Status: prototype.** The song model (`firmware/src/song.h`, tested in `tests/test_song.c`), a test song, a simple
+> synth and the ARRANGE screen, running in the simulator and on the host. Not yet tried on an FM-1.
+
+```
+firmware/src/song.h       the song model: tracks, riffs, notes, the arrangement grid, pack / unpack
+firmware/src/fm2000.c     the app: ARRANGE screen, sequencer, synth (app_init / app_step / app_audio)
+web/                      the simulator: the same C compiled to WebAssembly, on a drawn FM-1
+sim/                      the simulator, built (web/build.sh): open with web/serve.sh, or publish with GitHub Pages
+tests/run_tests.sh        the model's tests, the host run, the simulator headless
+```
+
+**Simulator:** `web/serve.sh`, then http://localhost:8000. After a change: `web/build.sh` (needs clang with wasm32
+and lld: on macOS `brew install llvm lld`). Keys: arrows move the cursor, PgUp/PgDn pick the riff, Space plays.
+
+**Song model in short:** `cell[bar][track]` starts a riff (1..32) or is empty; a riff plays on through its length
+(64 steps = 4 bars) unless the next one starts first. Every note of every riff lives in one 4096-note pool. A song
+packs to a few KB (`song_pack` / `song_unpack`, with a CRC) for the flash.
+
+---
+
 <p align="center"><img src="assets/logo.svg" width="96" alt="Dinghy"></p>
 
 # Dinghy
