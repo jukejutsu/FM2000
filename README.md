@@ -1,7 +1,7 @@
 # FM2000
 
-**A Music 2000-style song maker for the M-VAVE FM-1:** four tracks, a pool of riffs per track (up to 64 steps, with
-chords and note lengths), and the song as a grid of bars you place riffs into. Built on Dinghy (below).
+**A Music 2000-style song maker for the M-VAVE FM-1:** four tracks (three synths and the drums), a pool of riffs per
+track (up to 64 steps, with chords and note lengths), and the song as a timeline of bars you place riffs onto. Built on Dinghy (below).
 
 > **Status: prototype.** The song model (`firmware/src/song.h`, tested in `tests/test_song.c`), a test song, a simple
 > synth and the ARRANGE screen, running in the simulator and on the host. Not yet tried on an FM-1.
@@ -15,7 +15,8 @@ tests/run_tests.sh        the model's tests, the host run, the simulator headles
 ```
 
 **Simulator:** `web/serve.sh`, then http://localhost:8000. After a change: `web/build.sh` (needs clang with wasm32
-and lld: on macOS `brew install llvm lld`). Keys: arrows move the cursor, PgUp/PgDn pick the riff, Space plays.
+and lld: on macOS `brew install llvm lld`). Time runs left to right. ↑↓ (ALGORITHM) the track, ←→ (SELECT) the bar, Shift-←→ (PRESETS) the track's sound or drum kit,
+Shift-↑↓ (KNOB 1) the riff at the cursor, Space plays. Tracks 1-3 take sound engines (one so far, BASIC); track 4 is the drums.
 
 **Song model in short:** `cell[bar][track]` starts a riff (1..32) or is empty; a riff plays on through its length
 (64 steps = 4 bars) unless the next one starts first. Every note of every riff lives in one 4096-note pool. A song

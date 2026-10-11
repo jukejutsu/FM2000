@@ -44,11 +44,13 @@ typedef struct {
 } song_riff_t;
 
 typedef struct {
-    uint8_t inst;                       /* the instrument (engine + patch), meaning set by the app */
+    uint8_t engine;                     /* the sound engine (tracks 1-3; the drum track has its own), set by the app */
+    uint8_t inst;                       /* the sound: a preset of the engine, or the drum track's kit */
     uint8_t vol;                        /* 0..127 */
     uint8_t pan;                        /* 0..127, 64 = centre */
     uint8_t flags;                      /* SONG_MUTE, SONG_SOLO */
 } song_track_t;
+#define SONG_DRUM_TRACK 3u              /* the fourth track is the drums: inst picks a kit, notes pick drums */
 #define SONG_MUTE 1u
 #define SONG_SOLO 2u
 
@@ -101,7 +103,7 @@ static void song_init(song_t *s)
     s->name[0] = 'S'; s->name[1] = 'O'; s->name[2] = 'N'; s->name[3] = 'G';
     s->bpm10 = 1200;
     for (t = 0; t < SONG_TRACKS; t++) {
-        s->track[t].inst = (uint8_t)t;
+        s->track[t].inst = (uint8_t)(t == SONG_DRUM_TRACK ? 0u : t);
         s->track[t].vol = 100;
         s->track[t].pan = 64;
     }
@@ -333,14 +335,14 @@ static uint32_t song_notes_at(const song_t *s, uint32_t track, uint32_t step, so
 /* ------------------------------------------------------------------ saving */
 /* The packed song, for the flash or a file: little-endian, only what is used.
  *   "F2KS" ver(1) name[8] bpm10(2) swing loop_start loop_end
- *   tracks: inst vol pan flags            x4
+ *   tracks: engine inst vol pan flags     x4
  *   riffs:  steps color count(2) name[6]  x4x32  (steps 0: unused, nothing else follows)
  *   cells:  128 x 4
  *   notes:  start len note vel            x nev (riff by riff, as counted above)
  *   crc32 of everything before it (4) */
 #define SONG_MAGIC "F2KS"
 #define SONG_VERSION 1u
-#define SONG_PACK_MAX (4u + 1u + SONG_NAME + 5u + SONG_TRACKS * 4u + SONG_TRACKS * SONG_RIFFS * 10u + \
+#define SONG_PACK_MAX (4u + 1u + SONG_NAME + 5u + SONG_TRACKS * 5u + SONG_TRACKS * SONG_RIFFS * 10u + \
                        SONG_BARS * SONG_TRACKS + SONG_EVENTS * 4u + 4u)
 
 static uint32_t song_crc32(const uint8_t *p, uint32_t n)
@@ -362,7 +364,7 @@ static uint32_t song_pack(const song_t *s, uint8_t *out, uint32_t max)
     PUT(SONG_VERSION);
     for (i = 0; i < SONG_NAME; i++) PUT(s->name[i]);
     PUT(s->bpm10); PUT(s->bpm10 >> 8); PUT(s->swing); PUT(s->loop_start); PUT(s->loop_end);
-    for (t = 0; t < SONG_TRACKS; t++) { PUT(s->track[t].inst); PUT(s->track[t].vol); PUT(s->track[t].pan); PUT(s->track[t].flags); }
+    for (t = 0; t < SONG_TRACKS; t++) { PUT(s->track[t].engine); PUT(s->track[t].inst); PUT(s->track[t].vol); PUT(s->track[t].pan); PUT(s->track[t].flags); }
     for (t = 0; t < SONG_TRACKS; t++)
         for (r = 0; r < SONG_RIFFS; r++) {
             const song_riff_t *f = &s->riff[t][r];
@@ -392,7 +394,7 @@ static int song_unpack(song_t *s, const uint8_t *in, uint32_t n)
     for (i = 0; i < SONG_NAME; i++) GET(s->name[i]);
     { uint32_t lo, hi; GET(lo); GET(hi); s->bpm10 = (uint16_t)(lo | hi << 8); }
     GET(s->swing); GET(s->loop_start); GET(s->loop_end);
-    for (t = 0; t < SONG_TRACKS; t++) { GET(s->track[t].inst); GET(s->track[t].vol); GET(s->track[t].pan); GET(s->track[t].flags); }
+    for (t = 0; t < SONG_TRACKS; t++) { GET(s->track[t].engine); GET(s->track[t].inst); GET(s->track[t].vol); GET(s->track[t].pan); GET(s->track[t].flags); }
     for (t = 0; t < SONG_TRACKS; t++)
         for (r = 0; r < SONG_RIFFS; r++) {
             song_riff_t *f = &s->riff[t][r];
