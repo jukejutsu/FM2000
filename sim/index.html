@@ -65,7 +65,7 @@ footer { margin-top: 18px; font-size: 12px; color: var(--dim); text-align: cente
   <div><b>KNOB 1</b><span>riff at the cursor · <kbd>Shift</kbd> <kbd>↑</kbd> <kbd>↓</kbd></span></div>
   <div><b>PLAY</b><span>play from the cursor / stop · <kbd>Space</kbd></span></div>
   <div><b>KNOB 2</b><span>loop on (4 bars from the cursor) / off · <kbd>P</kbd></span></div>
-  <div><b>KNOB 4</b><span>zoom 0.5x / 1x · <kbd>K</kbd></span></div>
+  <div><b>KNOB 4</b><span>zoom 2x · 1x · 0.5x · 0.25x · out <kbd>K</kbd>, in <kbd>Shift</kbd> <kbd>K</kbd></span></div>
   <div><b>KNOB 3</b><span>loop length · <kbd>A</kbd> <kbd>G</kbd></span></div>
   <div><b>GLO</b><span>metronome on / off (for now) · <kbd>6</kbd></span></div>
   <div><b>REC</b><span>arm (recording: not yet) · <kbd>=</kbd></span></div>
@@ -125,7 +125,7 @@ function label(parent, x, y, s, size, font = SANS, ink = "var(--label)") {
 const KEYNAMES = ["F", "F♯", "G", "G♯", "A", "A♯", "B", "C", "C♯", "D", "D♯", "E"];
 const keyName = (k) => KEYNAMES[k % 12] + (3 + Math.floor((k + 5) / 12));
 
-let loopOn = false, zoomOut = false;   // P toggles KNOB 2 (clockwise on, back off): the page's idea of the loop's state
+let loopOn = false;   // P toggles KNOB 2 (clockwise on, back off): the page's idea of the loop's state
 let node = null, btnMask = 0, keyMask = 0, latched = 0, masterValue = 700, lastLeds = [0, 0], layout = null;
 const angle = Object.fromEntries(KNOBS.map((n) => [n, 0]));
 angle.MASTER = -135 + 270 * masterValue / 1023;
@@ -258,7 +258,6 @@ function turn(k, n) {
   } else {
     angle[k.name] = (angle[k.name] + n * 18) % 360;
     if (k.role === EN["KNOB 2"]) loopOn = n > 0;
-    if (k.role === EN["KNOB 4"]) zoomOut = n < 0;
     send({ type: "enc", role: k.role, n });
   }
   drawKnob(k);
@@ -307,7 +306,7 @@ const LETTER_TURNS = { KeyA: [EN["KNOB 3"], -1], KeyG: [EN["KNOB 3"], 1] };
 const SHIFT_TURNS = { ArrowLeft: [EN.PRESETS, -1], ArrowRight: [EN.PRESETS, 1], ArrowUp: [EN["KNOB 1"], 1], ArrowDown: [EN["KNOB 1"], -1] };
 addEventListener("keydown", (e) => {
   if (!node || e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.(".hit.knob")) return;
-  if (e.code === "KeyK" && !e.repeat) { send({ type: "enc", role: EN["KNOB 4"], n: zoomOut ? 1 : -1 }); zoomOut = !zoomOut; e.preventDefault(); return; }
+  if (e.code === "KeyK") { turn(knobs.find((k) => k.role === EN["KNOB 4"]), e.shiftKey ? 1 : -1); e.preventDefault(); return; }
   if (e.code === "KeyP" && !e.repeat) { send({ type: "enc", role: EN["KNOB 2"], n: loopOn ? -1 : 1 }); loopOn = !loopOn; e.preventDefault(); return; }
   const tn = (e.shiftKey && SHIFT_TURNS[e.code]) || TURNS[e.code] || LETTER_TURNS[e.code];
   if (tn) { const [r, n] = tn; turn(knobs.find((k) => k.role === r), n); e.preventDefault(); return; }

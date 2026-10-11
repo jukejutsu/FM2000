@@ -48,7 +48,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 | KNOB 1 | the riff placed on the bar (or none) | Shift ↑ ↓ |
 | KNOB 2 | the loop: clockwise on (4 bars from the cursor's bar), anticlockwise off | P |
 | KNOB 3 | the loop's length, 1-32 bars | A / G |
-| KNOB 4 | zoom: anticlockwise 0.5x (16 bars), clockwise 1x from the cursor | K |
+| KNOB 4 | zoom 2x / 1x / 0.5x / 0.25x (4 to 32 bars): anticlockwise out, clockwise in from the cursor | K, Shift K |
 | PLAY | play from the cursor / stop | Space |
 | GLO | the metronome (for now) | 6 |
 | keys | play the track's sound; OCT− OCT+ the octave | Z…/ and Q…O rows, [ ] |

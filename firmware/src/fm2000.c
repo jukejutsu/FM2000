@@ -10,7 +10,8 @@
  *   KNOB 1       the riff that starts at the cursor (0 = none)
  *   KNOB 2       the loop: clockwise on (from the cursor's bar), anticlockwise off
  *   KNOB 3       the loop's length, 1..32 bars
- *   KNOB 4       zoom: anticlockwise 0.5x (16 bars in view), clockwise back to 1x from the cursor's bar
+ *   KNOB 4       zoom 2x / 1x / 0.5x / 0.25x (4 / 8 / 16 / 32 bars in view): anticlockwise out (round the cursor),
+ *                clockwise in (from the cursor's bar)
  *   PLAY         play the song from the cursor's bar / stop; REC arms (recording: not yet)
  *   GLO          the metronome on / off (for now)
  *   keys         play the track's sound; OCT- OCT+ the octave
@@ -389,8 +390,11 @@ static const uint16_t RIFF_D[8] = {RGB(70, 55, 105), RGB(35, 80, 76), RGB(96, 76
 #define LANE_H 46
 #define FOOT_Y 220
 #define GX 40                                   /* the lanes start right of the track labels */
-#define BW ((int32_t)(ui.zoom ? 12 : 25))       /* a bar's width: 8 bars across 200 px (1x), or 16 (0.5x) */
-#define COLS (ui.zoom ? 16u : 8u)
+static const uint8_t ZOOM_BW[4] = {50, 25, 12, 6};   /* a bar's width at 2x 1x 0.5x 0.25x: 4 8 16 32 bars in 200 px */
+static const char *const ZOOM_NAME[4] = {"ZOOM 2X", "ZOOM 1X", "ZOOM 0.5X", "ZOOM 0.25X"};
+#define BW ((int32_t)ZOOM_BW[ui.zoom])
+#define COLS (4u << ui.zoom)
+#define ZOOM_1X 1u
 
 static struct {
     uint32_t bar, trk, left, oct;               /* the cursor, the first bar shown, the keys' octave (0..4) */
@@ -398,7 +402,7 @@ static struct {
     uint8_t held[27];
     uint32_t drawn_pos;                         /* the playhead drawn (a step, or ~0) */
     uint32_t rec;                               /* REC armed (recording itself: not yet) */
-    uint32_t zoom;                              /* 0: 1x (8 bars), 1: 0.5x (16 bars) */
+    uint32_t zoom;                              /* 0 2x, 1 1x, 2 0.5x, 3 0.25x */
     uint32_t loop_len;                          /* the loop's length in bars: 4 each time it is switched on */
     uint32_t msg_until;                         /* the footer shows ui.msg until then (fm1_ms) */
     char msg[24];
@@ -497,8 +501,8 @@ static void draw_ruler(void)
         num[len] = 0;
         if (bar == ui.bar) cv_rect(x, 0, BW, RULER_H, C_LOW);
         cv_rect(x, RULER_H - (bar % 4u ? 3 : 6), 1, bar % 4u ? 3 : 6, bar % 4u ? C_LOW : C_MID);
-        if (!ui.zoom || !(bar % 4u) || bar == ui.bar)
-            cv_text_on(x + (ui.zoom ? 2 : 3), 0, &FONT_S, num, bar == ui.bar ? C_WHITE : bar % 4u ? C_MID : C_TXT,
+        if (ui.zoom <= ZOOM_1X || !(bar % (ui.zoom == 3u ? 8u : 4u)) || bar == ui.bar)   /* (zoomed out: every 4th, 8th) */
+            cv_text_on(x + (ui.zoom > ZOOM_1X ? 1 : 3), 0, &FONT_S, num, bar == ui.bar ? C_WHITE : bar % 4u ? C_MID : C_TXT,
                        bar == ui.bar ? C_LOW : C_BLACK);
         if (song.loop_end > song.loop_start && bar >= song.loop_start && bar < song.loop_end)
             cv_rect(x, 0, BW, 2, C_ACC);        /* the loop: a line over its bars */
@@ -675,6 +679,7 @@ static void app_init(void)
     test_song();
     seq_bars = song_bars(&song);
     ui.oct = 2;
+    ui.zoom = ZOOM_1X;
     ui.loop_len = 4;
     ui.drawn_pos = ~0u;
     ui.dirty = D_ALL;
@@ -721,14 +726,14 @@ static void app_step(void)
         say_loop();
         ui.dirty |= D_RULER;
     }
-    if ((d = fm1_enc_take(ENC_KNOB4)) != 0) {           /* zoom: anticlockwise 0.5x (16 bars), clockwise 1x */
-        uint32_t z = d < 0;
-        if (z != ui.zoom) {
-            ui.zoom = z;
-            if (z) ui.left = ui.bar >= 8u ? ui.bar - 8u : 0u;   /* out: the cursor in the middle */
-            else ui.left = ui.bar;              /* back in: from where the cursor is */
+    if ((d = fm1_enc_take(ENC_KNOB4)) != 0) {           /* zoom: anticlockwise out, clockwise in, a step a detent */
+        int32_t z = clamp((int32_t)ui.zoom - d, 0, 3);
+        if ((uint32_t)z != ui.zoom) {
+            ui.zoom = (uint32_t)z;
+            if (d < 0) ui.left = ui.bar >= COLS / 2u ? ui.bar - COLS / 2u : 0u;   /* out: the cursor in the middle */
+            else ui.left = ui.bar;              /* in: from where the cursor is */
             if (ui.left > SONG_BARS - COLS) ui.left = SONG_BARS - COLS;
-            say(z ? "ZOOM 0.5X" : "ZOOM 1X");
+            say(ZOOM_NAME[ui.zoom]);
             ui.dirty |= D_RULER | D_LANES;
         }
     }
