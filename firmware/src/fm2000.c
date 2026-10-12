@@ -452,13 +452,15 @@ static struct {
     uint32_t drawn_pos;                         /* the playhead drawn (a step, or ~0) */
     uint32_t rec;                               /* REC armed (recording itself: not yet) */
     uint32_t zoom;                              /* 0 2x, 1 1x, 2 0.5x, 3 0.25x */
+    uint32_t marq_t0, marq_trk, marq_inst, marq_drawn;   /* the chosen track's name scrolling: since when, for what */
     uint32_t scrolling, vstep, vtarget;         /* playing: the view starts at vstep (sliding towards vtarget, a bar) */
     uint32_t mode;                              /* M_ARR, M_PRJ, M_RIF, M_EDT */
     uint32_t msg_until;                         /* the footer shows ui.msg until then (fm1_ms) */
     char msg[24];
     uint32_t dirty;
 } ui;
-enum { D_HEAD = 1, D_RULER = 2, D_LANES = 4, D_FOOT = 8, D_ALL = 15, D_PH = 16 };   /* D_PH: the playhead alone */
+enum { D_HEAD = 1, D_RULER = 2, D_LANES = 4, D_FOOT = 8, D_ALL = 15, D_PH = 16, D_LABEL = 32 };
+/* D_PH: the playhead alone; D_LABEL: the chosen track's name, scrolling */
 
 /* a page sliding on by a bar: from -> to in a few eased frames */
 #define SLIDE_MS 120u
@@ -508,6 +510,27 @@ static uint32_t copy_str(char *d, const char *s, uint32_t max)   /* returns the 
 
 /* text on a coloured ground: gfx.c's cv_text blends onto black, this blends from `bg` to `c` (black text on a
  * riff's block would otherwise get dark fringes) */
+/* text on a ground, drawn only between x0 and x1 (a name cut off at its box's edges) */
+static void cv_text_clip(int32_t x, int32_t y, const felucca_font_t *f, const char *s, uint16_t c, uint16_t bg,
+                         int32_t x0, int32_t x1)
+{
+    uint16_t ramp[16];
+    uint32_t a;
+    for (a = 0; a < 16u; a++) ramp[a] = mix565(bg, c, a * 16u / 15u);
+    for (; *s; s++) {
+        uint32_t gi = glyph(f, (uint8_t)*s), gx, gy, w = f->bw[gi], bpr = (w + 1u) / 2u;
+        const uint8_t *gd = f->data + f->off[gi];
+        for (gy = 0; gy < f->h; gy++)
+            for (gx = 0; gx < w; gx++) {
+                uint32_t v = gd[gy * bpr + gx / 2u];
+                int32_t px = x - f->pad + (int32_t)gx;
+                v = (gx & 1u) ? (v & 15u) : (v >> 4);
+                if (v && px >= x0 && px < x1) cv_pset(px, y + (int32_t)gy, ramp[v]);
+            }
+        x += f->adv[gi];
+    }
+}
+
 static int32_t cv_text_on(int32_t x, int32_t y, const felucca_font_t *f, const char *s, uint16_t c, uint16_t bg)
 {
     uint16_t ramp[16];
@@ -691,7 +714,7 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
     uint32_t bar, sel = t == ui.trk;
     uint32_t fb = VIEW / STEPS_PER_BAR, lb = (VIEW + COLS * STEPS_PER_BAR + STEPS_PER_BAR - 1u) / STEPS_PER_BAR;
     const song_track_t *tr = &song.track[t];
-    char lab[8], kind[5];
+    char lab[8];
     uint16_t pc = sel ? C_PANEL_HI : C_PANEL;   /* the track's card */
     if (lb > SONG_BARS) lb = SONG_BARS;
     cv_begin(240, LANE_H, C_BG);
@@ -751,13 +774,24 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
     cv_rect(236, 0, 4, LANE_H, C_BG);
     cv_rect(236, 1, 2, LANE_H - 2, pc);
     card_corners(2, 1, 236, LANE_H - 2, pc, C_BG, 1, 1);
-    cv_rect(GX - 1, 6, 1, LANE_H - 12, sel ? C_LOW : C_GRID_4);
-    card(7, 6, 17, 16, sel ? C_ACC : C_LOW, pc);
-    lab[0] = (char)('1' + t); lab[1] = 0;
-    cv_text_on(7 + (17 - text_w(&FONT_S, lab)) / 2, 6, &FONT_S, lab, C_ON_ACC, sel ? C_ACC : C_LOW);
-    copy_str(kind, t == SONG_DRUM_TRACK ? "DRUM" : sound_name(t), 4);   /* what the track is: its sound, short */
-    if (kind[3] == ' ') kind[3] = 0;
-    cv_text_on(6, 25, &FONT_S, kind, tr->flags & SONG_MUTE ? C_LOW : sel ? C_TXT : C_MID, pc);
+    {   /* the label: a grey tab as on Music 2000, the track's number in a chip, its sound's name under it, cut
+         * at the tab's edge; on the chosen track a name too long for it scrolls */
+        const char *name = sound_name(t);
+        int32_t tw = text_w(&FONT_S, name), x0 = 4, x1 = GX - 3, off = 0;
+        uint16_t ink = tr->flags & SONG_MUTE ? C_CHROME_OFF : sel ? C_TXT : C_CHROME_INK;
+        card(2, 1, GX - 3, LANE_H - 2, C_CHROME, C_BG);
+        cv_rect(5, 1, GX - 9, 1, C_CHROME_HI);
+        cv_rect(5, LANE_H - 2, GX - 9, 1, C_CHROME_LO);
+        card(6, 5, 18, 16, sel ? C_ACC : C_CHROME_LO, C_CHROME);
+        lab[0] = '0'; lab[1] = (char)('1' + t); lab[2] = 0;
+        cv_text_on(6 + (18 - text_w(&FONT_S, lab)) / 2, 5, &FONT_S, lab, C_ON_ACC, sel ? C_ACC : C_CHROME_LO);
+        if (sel && tw > x1 - x0) {              /* scrolls: a second away at the start, then a pixel every 60 ms */
+            uint32_t el = fm1_ms - ui.marq_t0, loop = (uint32_t)tw + 14u;
+            off = el < 1000u ? 0 : (int32_t)(((el - 1000u) / 60u) % loop);
+            cv_text_clip(x0 - off + (int32_t)loop, 25, &FONT_S, name, ink, C_CHROME, x0, x1);
+        }
+        cv_text_clip(x0 - off, 25, &FONT_S, name, ink, C_CHROME, x0, x1);
+    }
     if (!ph_only) cv_blit(0, LANE_Y + t * LANE_H);
 }
 
@@ -1896,6 +1930,15 @@ static void app_step(void)
         sl_arr.on = 0;
         ui.dirty |= D_RULER | D_LANES;
     }
+    if (ui.trk != ui.marq_trk || song.track[ui.trk].inst != ui.marq_inst) {   /* the name scrolls from its start again */
+        ui.marq_trk = ui.trk;
+        ui.marq_inst = song.track[ui.trk].inst;
+        ui.marq_t0 = fm1_ms;
+    }
+    if (ui.mode == M_ARR && text_w(&FONT_S, sound_name(ui.trk)) > GX - 7 && fm1_ms - ui.marq_drawn >= 60u) {
+        ui.marq_drawn = fm1_ms;
+        ui.dirty |= D_LABEL;
+    }
     if (ui.mode == M_RIF) {                     /* RIF: the same, within the opened riff, a page a bar (or the view) */
         uint32_t rp = rif_pos();
         if (rp != ~0u) {
@@ -1948,6 +1991,7 @@ static void app_step(void)
                 for (k = 0; k < SONG_TRACKS; k++) draw_lane(k, pos);
             else for (k = 0; k < SONG_TRACKS; k++) { ph_only = 1; draw_lane_cols(k, pos, x0, w); }
         }
+        if ((ui.dirty & D_LABEL) && !(ui.dirty & D_LANES)) { ph_only = 1; draw_lane_cols(ui.trk, pos, 0, GX); }
         if (ui.dirty & D_FOOT) draw_foot();
     }
     ui.dirty = 0;
