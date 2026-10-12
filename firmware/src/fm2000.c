@@ -1002,12 +1002,15 @@ static void prj_input(int32_t d, uint32_t b)
 }
 
 /* ================================================================== RIF: a riff's piano roll */
-/* SEQ on a riff in ARR opens it here; HOME (or SEQ) goes back. Time across (16 steps in view), pitch up the screen
- * (20 notes in view); the cursor is a step and a note: SELECT moves along the steps, ALGORITHM along the notes.
- * The drum track's rows are named by their drums. (Editing the notes: next.) */
+/* SEQ on a riff in ARR opens it here; HOME (or SEQ) goes back. Time across, pitch up the screen (20 notes in view);
+ * the cursor is a step and a note. The drum track's rows are named by their drums.
+ *   SELECT / ALGORITHM   the cursor: the step / the note (as on ARR)
+ *   OCT+ / OCT-          a note in at the cursor (1 step) / the note under the cursor out
+ *   KNOB 1 / 2 / 3       the note under the cursor: along the steps / up and down / its length
+ *   KNOB 4               zoom, as on ARR: 8 / 16 / 32 / 64 steps in view */
 #define RIF_KW 34                               /* the keyboard column */
-#define RIF_SW 12                               /* a step's width */
-#define RIF_STEPS 16                            /* steps in view */
+#define RIF_SW ((int32_t)(24 >> rif.zoom))      /* a step's width: 24 12 6 3 px at 2x 1x 0.5x 0.25x */
+#define RIF_STEPS (8u << rif.zoom)              /* steps in view: 8 16 32 64 */
 #define RIF_RH 10                               /* a note row's height */
 #define RIF_ROWS 20                             /* rows in view */
 #define RIF_Y 20
@@ -1016,7 +1019,29 @@ static struct {
     uint32_t trk, r, at;                        /* the riff (track, id) and the bar the opened copy starts at */
     uint32_t step, note;                        /* the cursor */
     uint32_t left, top;                         /* the first step and the highest note in view */
+    uint32_t zoom;                              /* as ARR's: 0 2x, 1 1x, 2 0.5x, 3 0.25x */
+    uint32_t aud_note, aud_until;               /* a note sounding for a moment (put in, moved) */
 } rif;
+
+/* the note of the riff under the cursor (its pitch, a step it covers): its index in song.ev, or -1 */
+static int32_t rif_note_here(void)
+{
+    const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
+    uint32_t i;
+    for (i = f->first; i < (uint32_t)f->first + f->count; i++) {
+        const song_ev_t *e = &song.ev[i];
+        if (e->note == rif.note && rif.step >= e->start && rif.step < (uint32_t)e->start + e->len) return (int32_t)i;
+    }
+    return -1;
+}
+static void audition(uint32_t note)             /* the note, briefly, on the riff's track */
+{
+    if (rif.aud_until) ask(Q_OFF, rif.trk, rif.aud_note, 0);
+    ask(Q_ON, rif.trk, note, 100);
+    rif.aud_note = note;
+    rif.aud_until = fm1_ms + 180u;
+    if (!rif.aud_until) rif.aud_until = 1;
+}
 
 static const char *drum_name(uint32_t n)        /* General MIDI's names, short; 0 for notes without one */
 {
@@ -1127,9 +1152,12 @@ static void draw_rif_rows(uint32_t r0, uint32_t nr, uint32_t pos)   /* rows r0 .
     /* the steps: a faint line on each, stronger on the beats and the bars; past the riff's end, shaded */
     for (s = 0; s <= RIF_STEPS; s++) {
         uint32_t st = rif.left + s;
-        int32_t x = RIF_KW + (int32_t)(s * RIF_SW);
-        cv_rect(x, 0, 1, (int32_t)(nr * RIF_RH), st % 16u == 0u ? RGB(44, 44, 54) : st % 4u == 0u ? C_GRID_4 : C_GRID_BAR);
-        if (s < RIF_STEPS && st >= f->steps) cv_rect(x + 1, 0, RIF_SW - 1, (int32_t)(nr * RIF_RH), RGB(6, 6, 8));
+        int32_t x = RIF_KW + (int32_t)(s * (uint32_t)RIF_SW);
+        if (st % 16u == 0u) cv_rect(x, 0, 1, (int32_t)(nr * RIF_RH), RGB(44, 44, 54));
+        else if (st % 4u == 0u) { if (RIF_SW >= 3) cv_rect(x, 0, 1, (int32_t)(nr * RIF_RH), C_GRID_4); }
+        else if (RIF_SW >= 6) cv_rect(x, 0, 1, (int32_t)(nr * RIF_RH), C_GRID_BAR);
+        if (s < RIF_STEPS && st >= f->steps) cv_rect(x + (RIF_SW > 3 ? 1 : 0), 0, RIF_SW > 3 ? RIF_SW - 1 : RIF_SW,
+                                                    (int32_t)(nr * RIF_RH), RGB(6, 6, 8));
     }
     /* the notes */
     for (i = f->first; i < (uint32_t)f->first + f->count; i++) {
@@ -1141,20 +1169,21 @@ static void draw_rif_rows(uint32_t r0, uint32_t nr, uint32_t pos)   /* rows r0 .
         if (s1 <= rif.left || s0 >= rif.left + RIF_STEPS) continue;
         if (s0 < rif.left) s0 = rif.left;
         if (s1 > rif.left + RIF_STEPS) s1 = rif.left + RIF_STEPS;
-        x0 = RIF_KW + 1 + (int32_t)((s0 - rif.left) * RIF_SW);
-        x1 = RIF_KW + (int32_t)((s1 - rif.left) * RIF_SW) - 1;
+        x0 = RIF_KW + 1 + (int32_t)((s0 - rif.left) * (uint32_t)RIF_SW);
+        x1 = RIF_KW + (int32_t)((s1 - rif.left) * (uint32_t)RIF_SW) - (RIF_SW > 3 ? 1 : 0);
+        if (x1 <= x0) x1 = x0 + 1;
         y = (int32_t)((row_ - r0) * RIF_RH) + 1;
         riff_block(x0, y, x1 - x0, RIF_RH - 2, s0 != e->start, 0,
                    e->note == rif.note && rif.step >= e->start && rif.step < (uint32_t)e->start + e->len ? C_BLOCK_SEL : C_BLOCK);
     }
     /* the cursor, and the playhead when the opened copy plays */
     if (rif.note <= rif.top && rif.top - rif.note >= r0 && rif.top - rif.note < r0 + nr) {
-        int32_t x = RIF_KW + (int32_t)((rif.step - rif.left) * RIF_SW), y = (int32_t)((rif.top - rif.note - r0) * RIF_RH);
+        int32_t x = RIF_KW + (int32_t)((rif.step - rif.left) * (uint32_t)RIF_SW), y = (int32_t)((rif.top - rif.note - r0) * RIF_RH);
         cv_rect(x, y, RIF_SW + 1, 1, C_TXT); cv_rect(x, y + RIF_RH - 1, RIF_SW + 1, 1, C_TXT);
         cv_rect(x, y, 1, RIF_RH, C_TXT); cv_rect(x + RIF_SW, y, 1, RIF_RH, C_TXT);
     }
     if (pos != ~0u && pos >= rif.left && pos < rif.left + RIF_STEPS)
-        cv_rect(RIF_KW + (int32_t)((pos - rif.left) * RIF_SW), 0, 2, (int32_t)(nr * RIF_RH), C_PLAY);
+        cv_rect(RIF_KW + (int32_t)((pos - rif.left) * (uint32_t)RIF_SW), 0, 2, (int32_t)(nr * RIF_RH), C_PLAY);
     cv_blit(0, RIF_Y + r0 * RIF_RH);
 }
 
@@ -1173,10 +1202,14 @@ static void draw_rif_foot(void)
         n += put_dec(s + n, f->steps);
         copy_str(s + n, " ST", 4);
         cv_text_on(6, 2, &FONT_S, s, C_ACC, C_BG);
-        n = put_dec(s, rif.step + 1u);         /* where the cursor is: the step, the note */
+        n = put_dec(s, rif.step + 1u);         /* where the cursor is: the step, the note (and its length) */
         s[n++] = ' '; s[n++] = ' ';
-        if (rif.trk == SONG_DRUM_TRACK && drum_name(rif.note)) copy_str(s + n, drum_name(rif.note), 6);
-        else { note_name(nn, rif.note); copy_str(s + n, nn, 5); }
+        if (rif.trk == SONG_DRUM_TRACK && drum_name(rif.note)) n += copy_str(s + n, drum_name(rif.note), 6);
+        else { note_name(nn, rif.note); n += copy_str(s + n, nn, 5); }
+        {
+            int32_t i = rif_note_here();
+            if (i >= 0) { n += copy_str(s + n, "  L", 4); put_dec(s + n, song.ev[i].len); s[n + (song.ev[i].len >= 10u ? 2 : 1)] = 0; }
+        }
         cv_text_on(234 - text_w(&FONT_S, s), 2, &FONT_S, s, C_TXT, C_BG);
     }
     cv_blit(0, FOOT_Y);
@@ -1278,6 +1311,7 @@ static void app_init(void)
     seq_bars = song_bars(&song);
     ui.oct = 2;
     ui.zoom = ZOOM_1X;
+    rif.zoom = ZOOM_1X;
     ui.drawn_pos = ~0u;
     ui.dirty = D_ALL;
     lcd_fill(0, 0, 240, 240, C_BLACK);
@@ -1359,7 +1393,73 @@ static void app_step(void)
             rif_follow();
             ui.dirty |= D_LANES | D_FOOT;
         }
-        enc(ENC_PRESETS); enc(ENC_KNOB1); enc(ENC_KNOB2); enc(ENC_KNOB3); enc(ENC_KNOB4);
+        if ((d = enc(ENC_KNOB1)) != 0) {   /* the note under the cursor along the steps */
+            int32_t i = rif_note_here();
+            if (i < 0) say("NO NOTE HERE");
+            else {
+                song_ev_t e = song.ev[i];
+                int32_t ns = clamp((int32_t)e.start + d, 0, (int32_t)f->steps - 1);
+                uint32_t off = rif.step - e.start;
+                int found = 0;
+                if (ns != (int32_t)e.start) {
+                    riff_find(&song, f, (uint32_t)ns, e.note, &found);
+                    if (found) say("NO ROOM");
+                    else {
+                        riff_note_del(&song, rif.trk, rif.r, e.start, e.note);
+                        riff_note_set(&song, rif.trk, rif.r, (uint32_t)ns, e.len, e.note, e.vel);
+                        rif.step = (uint32_t)ns + off < f->steps ? (uint32_t)ns + off : (uint32_t)ns;
+                        rif_follow();
+                        edited();
+                    }
+                }
+                ui.dirty |= D_LANES | D_FOOT;
+            }
+        }
+        if ((d = enc(ENC_KNOB2)) != 0) {        /* the note under the cursor up / down (clockwise: up) */
+            int32_t i = rif_note_here();
+            if (i < 0) say("NO NOTE HERE");
+            else {
+                song_ev_t e = song.ev[i];
+                int32_t nn = clamp((int32_t)e.note + d, 0, 127);
+                int found = 0;
+                if (nn != (int32_t)e.note) {
+                    riff_find(&song, f, e.start, (uint32_t)nn, &found);
+                    if (found) say("NO ROOM");
+                    else {
+                        riff_note_del(&song, rif.trk, rif.r, e.start, e.note);
+                        riff_note_set(&song, rif.trk, rif.r, e.start, e.len, (uint32_t)nn, e.vel);
+                        rif.note = (uint32_t)nn;
+                        rif_follow();
+                        audition(rif.note);
+                        edited();
+                    }
+                }
+                ui.dirty |= D_LANES | D_FOOT;
+            }
+        }
+        if ((d = enc(ENC_KNOB3)) != 0) {        /* its length, 1 step up to the riff's end */
+            int32_t i = rif_note_here();
+            if (i < 0) say("NO NOTE HERE");
+            else {
+                song_ev_t *e = &song.ev[i];
+                e->len = (uint8_t)clamp((int32_t)e->len + d, 1, (int32_t)(f->steps - e->start));
+                if (rif.step >= (uint32_t)e->start + e->len) { rif.step = (uint32_t)e->start + e->len - 1u; rif_follow(); }
+                edited();
+                ui.dirty |= D_LANES | D_FOOT;
+            }
+        }
+        if ((d = enc(ENC_KNOB4)) != 0) {        /* zoom, as on ARR: anticlockwise out, clockwise in */
+            int32_t z = clamp((int32_t)rif.zoom - d, 0, 3);
+            if ((uint32_t)z != rif.zoom) {
+                rif.zoom = (uint32_t)z;
+                rif.left = rif.step >= RIF_STEPS / 2u ? rif.step - RIF_STEPS / 2u : 0u;
+                if (d > 0) rif.left = rif.step / RIF_STEPS * RIF_STEPS;
+                rif_follow();
+                say(ZOOM_NAME[rif.zoom]);
+                ui.dirty |= D_LANES | D_FOOT;
+            }
+        }
+        enc(ENC_PRESETS);
     } else {
         if ((d = enc(ENC_ALGORITHM)) != 0) {       /* the track */
             ui.trk = (uint32_t)clamp((int32_t)ui.trk + d, 0, SONG_TRACKS - 1);
@@ -1449,6 +1549,21 @@ static void app_step(void)
         prj_input(pd, b);
         b &= ~((1u << BTN_OCT_DOWN) | (1u << BTN_OCT_UP));   /* (the octave keys answer here, they do not shift) */
     }
+    if (ui.mode == M_RIF && b & ((1u << BTN_OCT_DOWN) | (1u << BTN_OCT_UP))) {   /* RIF: a note in / out */
+        if (b & (1u << BTN_OCT_UP)) {
+            if (rif_note_here() >= 0) say("A NOTE IS HERE");
+            else if (riff_note_set(&song, rif.trk, rif.r, rif.step, 1, rif.note, 100) < 0) say("NO ROOM");
+            else { audition(rif.note); edited(); }
+        }
+        if (b & (1u << BTN_OCT_DOWN)) {
+            int32_t i = rif_note_here();
+            if (i < 0) say("NO NOTE HERE");
+            else { riff_note_del(&song, rif.trk, rif.r, song.ev[i].start, song.ev[i].note); edited(); }
+        }
+        b &= ~((1u << BTN_OCT_DOWN) | (1u << BTN_OCT_UP));
+        ui.dirty |= D_LANES | D_FOOT;
+    }
+    if (rif.aud_until && (int32_t)(rif.aud_until - fm1_ms) <= 0) { ask(Q_OFF, rif.trk, rif.aud_note, 0); rif.aud_until = 0; }
     if (b & (1u << BTN_REC)) { ui.rec = !ui.rec; ui.dirty |= D_HEAD; }
     if (b & (1u << BTN_GLO)) { seq_click = !seq_click; ui.dirty |= D_HEAD; }   /* the metronome (for now on GLO) */
     if (b & (1u << BTN_PLAY)) {
@@ -1489,8 +1604,9 @@ static void app_step(void)
     fm1_led_key(BTN_PLAY, seq_play != 0);
     fm1_led_key(BTN_REC, ui.rec != 0);
     fm1_led_key(BTN_GLO, seq_click != 0);
-    fm1_led_key(BTN_OCT_DOWN, ui.mode == M_PRJ ? prj.ask != 0 || (prj.sel != PRJ_AUTO && prj.used[prj.sel]) : ui.oct < 2u);
-    fm1_led_key(BTN_OCT_UP, ui.mode == M_PRJ ? 1 : ui.oct > 2u);
+    fm1_led_key(BTN_OCT_DOWN, ui.mode == M_PRJ ? prj.ask != 0 || (prj.sel != PRJ_AUTO && prj.used[prj.sel])
+                              : ui.mode == M_RIF ? rif_note_here() >= 0 : ui.oct < 2u);
+    fm1_led_key(BTN_OCT_UP, ui.mode == M_PRJ ? 1 : ui.mode == M_RIF ? rif_note_here() < 0 : ui.oct > 2u);
     fm1_led_key(BTN_SAVE, ui.mode == M_PRJ);
     fm1_led_key(BTN_SEQ, ui.mode == M_RIF);
     for (k = 0; k < 27u; k++) fm1_led_key(KEY_LED(k), keys >> k & 1u);

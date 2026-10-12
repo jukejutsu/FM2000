@@ -24,7 +24,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 
 - The song model: tracks, riffs, notes, the arrangement, packing a song for the flash (tested: `tests/test_song.c`)
 - The ARR (arrangement) screen: cursor, scrolling, zoom, moving riffs along the timeline, the playhead
-- New riffs (SEQ on an empty bar), deleting riffs (SEQ held), the RIF piano roll to look into a riff
+- New riffs (SEQ on an empty bar), deleting riffs (SEQ held), the RIF piano roll to write and edit a riff's notes
 - Playback from the cursor, a loop of 1 to 32 bars, a metronome
 - Repeating a riff: a riff and its repeats drawn as one block, a line where each repeat begins
 - A simple synth: one engine (BASIC, 7 presets) for tracks 1-3, three drum kits for track 4
@@ -35,7 +35,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 ## Planned
 
 - Placing riffs on the timeline from the riff pool (it moves to its own control)
-- RIF: editing the notes (the piano roll is there to look at and move through)
+- RIF: velocity, the riff's length, copy / paste, recording from the keys
 - Recording riffs from the keys, quantised
 - Real sound engines for tracks 1-3 (from the Felucca family) and better drum kits
 - MIX, SND (sound editing), SNG (song settings) screens
@@ -60,9 +60,18 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 
 ## A riff (RIF screen)
 
-SEQ on a riff opens its piano roll; HOME or SEQ goes back. Time across (16 steps in view), pitch up the screen;
-on the drum track the rows are named by their drums. SELECT moves the cursor along the steps, ALGORITHM along the
-notes; the playhead runs through it when that copy of the riff plays. Editing the notes comes next.
+SEQ on a riff opens its piano roll; HOME or SEQ goes back. Time across, pitch up the screen beside a piano keyboard
+(the keys light up as you play them); on the drum track the rows are named by their drums.
+
+| Control | Does | In the simulator |
+| --- | --- | --- |
+| SELECT / ALGORITHM | the cursor: the step / the note | ← → / ↑ ↓ |
+| OCT+ | a note in at the cursor (1 step) | ] |
+| OCT− | the note under the cursor out | [ |
+| KNOB 1 | move the note along the steps | Shift ← → |
+| KNOB 2 | move the note up / down | P, Shift P |
+| KNOB 3 | the note's length | A, G |
+| KNOB 4 | zoom: 8 / 16 / 32 / 64 steps in view | K, Shift K |
 
 ## Projects (PRJ screen)
 
