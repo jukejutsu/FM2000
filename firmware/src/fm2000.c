@@ -1043,6 +1043,17 @@ static void note_name(char *s, uint32_t n)      /* "C#3" (C4 = 60) */
     if (n >= 12u) { s[k++] = (char)('0' + n / 12u - 1u); s[k] = 0; }
 }
 static int black_key(uint32_t n) { return (0x54Au >> (n % 12u)) & 1u; }
+#define C_KEY_WHITE RGB(128, 128, 136)          /* toned down: no glare next to the dark roll */
+#define C_KEY_BLACK RGB(26, 26, 32)
+#define C_KEY_INK RGB(24, 24, 30)               /* labels on a white or lit key */
+#define C_KEY_LIT_ROW RGB(34, 28, 52)
+static int key_down(uint32_t n)                 /* a key (or MIDI note on the track) plays note n now */
+{
+    uint32_t k;
+    for (k = 0; k < 27u; k++)
+        if ((ui.keys_prev >> k & 1u) && ui.held[k] == n) return 1;
+    return 0;
+}
 
 static void rif_follow(void)                    /* the view keeps the cursor in it */
 {
@@ -1081,17 +1092,37 @@ static void draw_rif_rows(uint32_t r0, uint32_t nr, uint32_t pos)   /* rows r0 .
     for (row = 0; row < nr; row++) {
         uint32_t n = rif.top - (r0 + row), cur = n == rif.note;
         int32_t y = (int32_t)(row * RIF_RH);
-        char s_[8];
-        const char *lab = 0;
         if ((int32_t)n < 0 || n > 127u) continue;
-        /* the row: darker for the black keys, the keyboard's label */
+        /* the row: darker for the black keys */
         cv_rect(RIF_KW, y, 240 - RIF_KW, RIF_RH, drums ? (n & 1u ? RGB(12, 12, 16) : RGB(16, 16, 22))
                                                     : black_key(n) ? RGB(10, 10, 14) : RGB(17, 17, 23));
         if (!drums && n % 12u == 0u) cv_rect(RIF_KW, y + RIF_RH - 1, 240 - RIF_KW, 1, C_GRID_4);   /* under each C */
-        cv_rect(0, y, RIF_KW - 2, RIF_RH, cur ? C_LOW : drums ? C_BG : black_key(n) ? RGB(8, 8, 10) : C_BG);
-        if (drums) lab = drum_name(n);
-        else if (n % 12u == 0u || cur) { note_name(s_, n); lab = s_; }
-        if (lab) cv_text_on(3, y - 3, &FONT_S, lab, cur ? C_WHITE : C_MID, cur ? C_LOW : C_BG);
+        {   /* the keyboard: white and black keys as on a piano, toned down; lilac while it is played */
+            uint32_t blk = black_key(n), lit = key_down(n);
+            uint16_t key = lit ? C_BLOCK_SEL : blk ? C_KEY_BLACK : C_KEY_WHITE;
+            cv_rect(0, y, RIF_KW - 2, RIF_RH, key);
+            if (!blk && (n % 12u == 0u || n % 12u == 5u))   /* the gap between two white keys: under C and F */
+                cv_rect(0, y + RIF_RH - 1, RIF_KW - 2, 1, C_KEY_BLACK);
+            if (lit) cv_rect(RIF_KW, y, 240 - RIF_KW, RIF_RH, C_KEY_LIT_ROW);   /* the row too, faintly */
+            if (cur) cv_rect(RIF_KW - 5, y + 1, 3, RIF_RH - 2, C_ACC);          /* the cursor's row: a mark */
+        }
+    }
+    /* the keys' labels, over the keys (a label is taller than its row): C on each octave and the cursor's note;
+     * on the drum track the drums the riff uses, the cursor's and the played ones */
+    for (row = 0; row < nr; row++) {
+        uint32_t n = rif.top - (r0 + row), cur = n == rif.note, lit, blk, used = 0;
+        int32_t y = (int32_t)(row * RIF_RH);
+        char s_[8];
+        const char *lab = 0;
+        if ((int32_t)n < 0 || n > 127u) continue;
+        lit = key_down(n);
+        blk = black_key(n);
+        if (drums) {
+            for (i = f->first; i < (uint32_t)f->first + f->count && !used; i++) used = song.ev[i].note == n;
+            if (used || cur || lit) lab = drum_name(n);
+        } else if (n % 12u == 0u || cur) { note_name(s_, n); lab = s_; }
+        if (lab) cv_text_on(3, y - 3, &FONT_S, lab, lit || !blk ? C_KEY_INK : C_TXT,
+                            lit ? C_BLOCK_SEL : blk ? C_KEY_BLACK : C_KEY_WHITE);
     }
     /* the steps: a faint line on each, stronger on the beats and the bars; past the riff's end, shaded */
     for (s = 0; s <= RIF_STEPS; s++) {
@@ -1438,6 +1469,7 @@ static void app_step(void)
     up = ui.keys_prev & ~keys;
     ui.keys_prev = keys;
     if (down) prj.touched = fm1_ms;
+    if (ui.mode == M_RIF && (down | up)) ui.dirty |= D_LANES;   /* the played keys light up in the roll */
     for (k = 0; k < 27u; k++) {
         if (up >> k & 1u) { ask(Q_OFF, ui.trk, ui.held[k], 0); midi_send(0x80u | ui.trk, ui.held[k], 0); }
         if (down >> k & 1u) {
