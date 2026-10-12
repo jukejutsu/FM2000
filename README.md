@@ -27,6 +27,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 - Playback from the cursor, a loop of 1 to 32 bars, a metronome
 - Repeating a riff: a riff and its repeats drawn as one block, a line where each repeat begins
 - A simple synth: one engine (BASIC, 7 presets) for tracks 1-3, three drum kits for track 4
+- Projects: 8 slots and an autosave in the flash, save / save as / load / new / clear, back where you were at power-on
 - A test song to play with
 - The simulator: the firmware's own C code compiled to WebAssembly, on a drawn FM-1 panel
 
@@ -35,7 +36,6 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 - Placing riffs on the timeline from the riff pool (it moves to its own control)
 - RIF: the riff editor (notes on a piano roll, the drum grid), entered from a block on ARR
 - Recording riffs from the keys, quantised
-- Saving songs to the flash
 - Real sound engines for tracks 1-3 (from the Felucca family) and better drum kits
 - MIX, SND (sound editing), SNG (song settings) screens
 - A build for the FM-1 and the first tests on the device
@@ -53,7 +53,23 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 | KNOB 4 | zoom 2x / 1x / 0.5x / 0.25x (4 to 32 bars): anticlockwise out, clockwise in from the cursor | K, Shift K |
 | PLAY | play from the cursor / stop | Space |
 | GLO | the metronome (for now) | 6 |
+| SAVE | tap: the PRJ screen (projects); hold 2 s: save | 8 |
 | keys | play the track's sound; OCT− OCT+ the octave | Z…/ and Q…O rows, [ ] |
+
+## Projects (PRJ screen)
+
+SAVE opens PRJ; HOME goes back. Eight slots and an autosave (AUTO, written by itself when the music is stopped and
+nothing has been touched for 10 s). At power-on the newest save comes back.
+
+| Control | Does |
+| --- | --- |
+| ALGORITHM | the slot |
+| OCT+ | load the slot, or a new project in an empty slot; yes to a question |
+| OCT− | clear the slot (it asks first); no to a question |
+| SAVE held 2 s | save: on PRJ into the chosen slot (save as, asks before overwriting), elsewhere into the project's own slot; not while playing |
+
+Loading or starting a new project with unsaved changes asks first. In the simulator the projects are kept in the
+browser.
 
 ## Try it
 

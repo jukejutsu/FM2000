@@ -68,9 +68,12 @@ static volatile uint32_t fm1_ms;                /* milliseconds since power-on (
 #define FELUCCA_UART 0
 #include "usb.c"
 
-/* ---- flash: read anywhere; erase / program only the update's staging area and the settings sector */
+/* ---- flash: read anywhere; erase / program only the update's staging area, the settings sector and the store */
 #define SETTINGS_AT 0x000FC000u                 /* one 4 KiB sector of Felucca's globals area */
-#define FL_RANGE_OK(off, n) (FL_IN(off, n, FL_OTA_LO, FL_OTA_HI) || FL_IN(off, n, SETTINGS_AT, SETTINGS_AT + 0x1000u))
+#define STORE_AT 0x00097000u                    /* the app's store: FM2000's projects, 216 KiB (Felucca's data area) */
+#define STORE_LEN 0x00036000u
+#define FL_RANGE_OK(off, n) (FL_IN(off, n, FL_OTA_LO, FL_OTA_HI) || FL_IN(off, n, SETTINGS_AT, SETTINGS_AT + 0x1000u) || \
+                             FL_IN(off, n, STORE_AT, STORE_AT + STORE_LEN))
 #include "fm1_flash.h"
 static uint8_t flash_ok;
 static int st_read(uint32_t off, void *dst, uint32_t n)
@@ -170,6 +173,26 @@ static int settings_save(const void *p, uint32_t n)   /* p in RAM, n <= 256 */
     if ((rc = fl_write(SETTINGS_AT + sizeof h, p, n)) != 0)
         return rc;
     return fl_write(SETTINGS_AT, (const uint8_t *)h, sizeof h);   /* the header last: a cut save stays invalid */
+}
+
+/* ---- the store: STORE_LEN bytes of flash for the app, addressed from 0. Erased = 0xFF; a write only clears
+ * bits, so erase a 4 KiB sector before writing it again. An erase holds the interrupts off ~50 ms (the sound
+ * drops out): erase when nothing plays. */
+static int store_read(uint32_t off, void *p, uint32_t n)
+{
+    if (!flash_ok || off > STORE_LEN || n > STORE_LEN - off) return -1;
+    return st_read(STORE_AT + off, p, n);
+}
+static int store_erase(uint32_t off)            /* the 4 KiB sector at off (a multiple of 4096) */
+{
+    uint32_t took;
+    if (!flash_ok || (off & 0xFFFu) || off >= STORE_LEN) return -1;
+    return fl_erase4k(STORE_AT + off, &took);
+}
+static int store_write(uint32_t off, const void *p, uint32_t n)   /* p in RAM */
+{
+    if (!flash_ok || off > STORE_LEN || n > STORE_LEN - off) return -1;
+    return fl_write(STORE_AT + off, (const uint8_t *)p, n);
 }
 
 /* ---- MIDI over USB: 4-byte USB-MIDI packets, cable 0 */

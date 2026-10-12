@@ -7,5 +7,7 @@ cd "$(dirname "$0")/.."
 mkdir -p build/host build/sim
 cc -O2 -Wall -Wextra -Wno-unused-function -Ifirmware/src -o build/host/test_song tests/test_song.c
 build/host/test_song
+cc -O2 -Wall -Wextra -Wno-unused-function -Ifirmware/src -o build/host/test_project tests/test_project.c
+build/host/test_project
 tests/run_host.sh
 if command -v node >/dev/null 2>&1 && [ -f sim/fm2000.wasm ]; then node web/test_sim.mjs build/sim/sim; fi

@@ -8,7 +8,8 @@
  *   - the panel: buttons, keys and encoders as the page sends them (web_buttons, web_keys, web_enc);
  *   - the LEDs: fm1_led_key into two masks the page reads back;
  *   - the screen: a 240 x 240 RGB565 frame the page copies when web_screen_draws() changes;
- *   - settings_load / settings_save: a 256-byte area the page keeps in the browser (web_nv*).
+ *   - settings_load / settings_save: a 256-byte area the page keeps in the browser (web_nv*);
+ *   - the store (store_read / _erase / _write): a 216 KiB flash image, its used sectors kept by the page (web_store*).
  * After the browser builds of X0X (charlesvestal/fm1-x0x) and Felucca (hugelton/Felucca, web/emu), GPL-3.0.
  * Not here: USB, the updater, the rescue, the crash screen, MIDI out (counted, not sent). */
 #include <stdint.h>
@@ -90,6 +91,33 @@ static int settings_save(const void *p, uint32_t n)
     web_nv[0] = 1; web_nv[1] = (uint8_t)n;
     memcpy(web_nv + 4, p, n);
     web_nv_writes++;
+    return 0;
+}
+
+/* ---- the store: a flash image the page keeps (web_store*: it hands the saved sectors back before web_init) */
+#define STORE_LEN 0x00036000u
+static uint8_t web_nor[STORE_LEN];
+static uint32_t web_store_writes;
+static int store_read(uint32_t off, void *p, uint32_t n)
+{
+    if (off > STORE_LEN || n > STORE_LEN - off) return -1;
+    memcpy(p, web_nor + off, n);
+    return 0;
+}
+static int store_erase(uint32_t off)
+{
+    if ((off & 0xFFFu) || off >= STORE_LEN) return -1;
+    memset(web_nor + off, 0xFF, 4096);
+    web_store_writes++;
+    return 0;
+}
+static int store_write(uint32_t off, const void *p, uint32_t n)
+{
+    const uint8_t *s = p;
+    uint32_t i;
+    if (off > STORE_LEN || n > STORE_LEN - off) return -1;
+    for (i = 0; i < n; i++) web_nor[off + i] &= s[i];
+    web_store_writes++;
     return 0;
 }
 
@@ -179,4 +207,8 @@ WEB_EXPORT(web_lit_buttons) uint32_t web_lit_buttons(void) { return web_led_butt
 WEB_EXPORT(web_lit_keys) uint32_t web_lit_keys(void) { return web_led_keys; }
 WEB_EXPORT(web_nv) uint8_t *web_nv_ptr(void) { return web_nv; }
 WEB_EXPORT(web_nv_size) uint32_t web_nv_size(void) { return sizeof web_nv; }
+WEB_EXPORT(web_store) uint8_t *web_store_ptr(void) { return web_nor; }
+WEB_EXPORT(web_store_size) uint32_t web_store_size(void) { return STORE_LEN; }
+WEB_EXPORT(web_store_writes) uint32_t web_store_writes_count(void) { return web_store_writes; }
+WEB_EXPORT(web_store_erase_all) void web_store_erase_all(void) { memset(web_nor, 0xFF, sizeof web_nor); }
 WEB_EXPORT(web_nv_writes) uint32_t web_nv_writes_count(void) { return web_nv_writes; }

@@ -70,6 +70,36 @@ static int settings_save(const void *p, uint32_t n)
     return 0;
 }
 
+/* the store: a RAM flash, erased at the start (nothing kept between runs) */
+#define STORE_LEN 0x00036000u
+static uint8_t host_nor[STORE_LEN];
+static int host_nor_ready;
+static void host_nor_init(void) { if (!host_nor_ready) { memset(host_nor, 0xFF, sizeof host_nor); host_nor_ready = 1; } }
+static int store_read(uint32_t off, void *p, uint32_t n)
+{
+    host_nor_init();
+    if (off > STORE_LEN || n > STORE_LEN - off) return -1;
+    memcpy(p, host_nor + off, n);
+    return 0;
+}
+static int store_erase(uint32_t off)
+{
+    host_nor_init();
+    if ((off & 0xFFFu) || off >= STORE_LEN) return -1;
+    memset(host_nor + off, 0xFF, 4096);
+    printf("%6u ms  store: erase %05X\n", fm1_ms, off);
+    return 0;
+}
+static int store_write(uint32_t off, const void *p, uint32_t n)
+{
+    const uint8_t *s = p;
+    uint32_t i;
+    host_nor_init();
+    if (off > STORE_LEN || n > STORE_LEN - off) return -1;
+    for (i = 0; i < n; i++) host_nor[off + i] &= s[i];       /* NOR: a write only clears bits */
+    return 0;
+}
+
 static uint8_t mq[64][3];
 static uint32_t mq_w, mq_r;
 static int midi_get(uint8_t *st, uint8_t *d1, uint8_t *d2)

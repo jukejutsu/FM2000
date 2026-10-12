@@ -15,6 +15,7 @@
  *   KNOB 4       zoom 2x / 1x / 0.5x / 0.25x (4 / 8 / 16 / 32 bars in view): anticlockwise out (round the cursor),
  *                clockwise in (from the cursor's bar)
  *   PLAY         play the song from the cursor's bar / stop; REC arms (recording: not yet)
+ *   SAVE         tap: PRJ, the projects (HOME back); hold 2 s: save (see PRJ below)
  *   GLO          the metronome on / off (for now)
  *   keys         play the track's sound; OCT- OCT+ the octave
  *
@@ -26,6 +27,7 @@
 #define APP_NAME "FM2000"
 #include "platform.c"
 #include "song.h"
+#include "project.h"
 #ifndef RING_PUBLISH
 #define RING_PUBLISH() __asm__ volatile("" ::: "memory")   /* (tests/host.c has none) */
 #endif
@@ -401,11 +403,27 @@ static struct {
     uint32_t drawn_pos;                         /* the playhead drawn (a step, or ~0) */
     uint32_t rec;                               /* REC armed (recording itself: not yet) */
     uint32_t zoom;                              /* 0 2x, 1 1x, 2 0.5x, 3 0.25x */
+    uint32_t mode;                              /* M_ARR, M_PRJ */
     uint32_t msg_until;                         /* the footer shows ui.msg until then (fm1_ms) */
     char msg[24];
     uint32_t dirty;
 } ui;
 enum { D_HEAD = 1, D_RULER = 2, D_LANES = 4, D_FOOT = 8, D_ALL = 15 };
+enum { M_ARR, M_PRJ };
+
+/* the project: which slot it is in, what is not saved, the PRJ screen's state */
+enum { ASK_NONE, ASK_CLEAR, ASK_LOAD, ASK_NEW, ASK_OVERWRITE };
+static struct {
+    uint32_t cur;                               /* the slot the project is in (1..8), or PRJ_NONE */
+    uint32_t unsaved;                           /* changed since it was saved to its slot */
+    uint32_t auto_due;                          /* changed since the last autosave */
+    uint32_t touched;                           /* fm1_ms of the last input */
+    uint32_t sel;                               /* PRJ: the row (0 AUTO, 1..8) */
+    uint32_t ask, ask_slot;                     /* PRJ: a question waiting for OCT+ / OCT- */
+    uint32_t used[PRJ_SLOTS];                   /* the slots' headers, read when PRJ opens and after a change */
+    prj_head_t head[PRJ_SLOTS];
+} prj;
+static void edited(void) { prj.unsaved = prj.auto_due = 1; }
 
 static void put_num(char *p, uint32_t v, uint32_t digits)
 {
@@ -722,9 +740,254 @@ static uint32_t next_riff(uint32_t t, uint32_t r, int32_t d)   /* 0 and the riff
 
 static int32_t clamp(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : v > hi ? hi : v; }
 
+/* ================================================================== PRJ: the projects (SAVE) */
+/* SAVE tapped: the PRJ screen (HOME leaves it). ALGORITHM picks a row: AUTO, then slots 1..8. OCT+ loads the
+ * row's project, or makes a new one in an empty slot; OCT- clears the slot. A question (clear? discard the
+ * changes? overwrite?) waits for OCT+ yes / OCT- no. SAVE held 2 s, anywhere, saves: on PRJ into the row's slot
+ * (save as), elsewhere into the project's own slot; not while playing (an erase stops the sound). */
+#define PRJ_ROW_Y 22
+#define PRJ_ROW_H 22
+#define SAVE_HOLD_MS 2000u
+#define SAVE_TAP_MS 300u                        /* shorter: a tap (the menu); longer: the countdown shows */
+
+static void prj_refresh(void)                   /* the slots' headers */
+{
+    uint32_t s;
+    for (s = 0; s < PRJ_SLOTS; s++) prj.used[s] = !prj_info(s, &prj.head[s]);
+}
+
+static const char *const ICON_DISK[16] = {      /* a floppy disk, 16 x 16 */
+    "##############..", "#..#######..#.#.", "#..#######..#..#", "#..#######..#..#", "#..#######.....#",
+    "#..##########..#", "#..............#", "#..............#", "#.############.#", "#.#..........#.#",
+    "#.#.######...#.#", "#.#..........#.#", "#.#.#######..#.#", "#.#..........#.#", "#.#..........#.#",
+    "################"};
+
+/* a box in the middle of the screen: the disk, a title, a line under it (the countdown, the slot) */
+static struct { uint32_t on, until; } splash;
+static void draw_splash(const char *title, const char *sub, uint16_t ink)
+{
+    int32_t i, j, tx;
+    cv_begin(240, 64, C_BLACK);
+    riff_frame(30, 2, 180, 60, 0, 0, ink, C_BG);
+    for (j = 0; j < 16; j++)
+        for (i = 0; i < 16; i++)
+            if (ICON_DISK[j][i] == '#') { cv_pset(48 + i * 2, 16 + j * 2, ink); cv_pset(49 + i * 2, 16 + j * 2, ink);
+                                          cv_pset(48 + i * 2, 17 + j * 2, ink); cv_pset(49 + i * 2, 17 + j * 2, ink); }
+    tx = 92;
+    cv_text_on(tx, 13, &FONT_M, title, C_TXT, C_BG);
+    if (sub && *sub) cv_text_on(tx, 34, &FONT_S, sub, ink, C_BG);
+    cv_blit(0, 88);
+    splash.on = 1;
+}
+static void splash_for(const char *title, const char *sub, uint16_t ink, uint32_t ms)   /* shown, then gone */
+{
+    draw_splash(title, sub, ink);
+    splash.until = fm1_ms + ms;
+    if (!splash.until) splash.until = 1;
+}
+
+static void slot_name(char *s, uint32_t slot)   /* "SLOT 3" */
+{
+    uint32_t n = copy_str(s, slot == PRJ_AUTO ? "AUTO" : "SLOT ", 6);
+    if (slot != PRJ_AUTO) { s[n++] = (char)('0' + slot); s[n] = 0; }
+}
+
+static void draw_prj_row(uint32_t slot)
+{
+    const prj_head_t *h = &prj.head[slot];
+    uint32_t sel = slot == prj.sel, cur = slot == prj.cur && slot != PRJ_AUTO;
+    uint16_t bg = sel ? C_RIFF_SEL : C_BLACK;
+    char s[24], lab[2] = {(char)(slot == PRJ_AUTO ? 'A' : '0' + slot), 0};
+    uint32_t n;
+    cv_begin(240, PRJ_ROW_H, C_BLACK);
+    if (sel) riff_frame(4, 1, 232, PRJ_ROW_H - 2, 0, 0, C_RIFF_SEL_EDGE, C_RIFF_SEL);
+    cv_text_on(12, 3, &FONT_S, lab, cur ? C_ACC : C_MID, bg);
+    if (!prj.used[slot]) {
+        cv_text_on(32, 3, &FONT_S, slot == PRJ_AUTO ? "NO AUTOSAVE" : "EMPTY", sel ? C_MID : C_LOW, bg);
+    } else {
+        n = copy_str(s, h->name, SONG_NAME);
+        if (!n) n = copy_str(s, "UNTITLED", 9);
+        if (cur && prj.unsaved) { s[n++] = '*'; s[n] = 0; }
+        cv_text_on(32, 3, &FONT_S, s, cur ? C_ACC : slot == PRJ_AUTO ? C_MID : C_TXT, bg);
+        n = put_dec(s, h->bars);
+        copy_str(s + n, h->bars == 1u ? " BAR" : " BARS", 6);
+        cv_text_on(228 - text_w(&FONT_S, s), 3, &FONT_S, s, C_MID, bg);
+    }
+    cv_blit(0, PRJ_ROW_Y + slot * PRJ_ROW_H);
+}
+
+static void draw_prj_foot(void)
+{
+    char s[32];
+    uint32_t n;
+    cv_begin(240, 20, C_BG);
+    if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0)
+        cv_text_on(6, 2, &FONT_S, ui.msg, C_WHITE, C_BG);
+    else if (prj.ask) {                         /* the question, and its two answers */
+        static const char *const Q[] = {"", "CLEAR ", "DISCARD CHANGES?", "DISCARD CHANGES?", "OVERWRITE "};
+        n = copy_str(s, Q[prj.ask], 20);
+        if (prj.ask == ASK_CLEAR || prj.ask == ASK_OVERWRITE) {
+            slot_name(s + n, prj.ask_slot);
+            n += 6u;
+            s[n++] = '?'; s[n] = 0;
+        }
+        cv_text_on(6, 2, &FONT_S, s, C_WHITE, C_BG);
+        cv_text_on(234 - text_w(&FONT_S, "+ YES  - NO"), 2, &FONT_S, "+ YES  - NO", C_ACC, C_BG);
+    } else if (prj.sel == PRJ_AUTO)
+        cv_text_on(6, 2, &FONT_S, prj.used[0] ? "OCT+ LOAD" : "", C_MID, C_BG);
+    else if (prj.used[prj.sel])
+        cv_text_on(6, 2, &FONT_S, "OCT+ LOAD   OCT- CLEAR", C_MID, C_BG);
+    else
+        cv_text_on(6, 2, &FONT_S, "OCT+ NEW   HOLD SAVE: SAVE", C_MID, C_BG);
+    cv_blit(0, FOOT_Y);
+}
+
+static void draw_prj(void)
+{
+    uint32_t s;
+    lcd_fill(0, HEAD_H, 240, PRJ_ROW_Y - HEAD_H, C_BLACK);   /* (the strip ARR's ruler leaves) */
+    for (s = 0; s < PRJ_SLOTS; s++) draw_prj_row(s);
+    draw_prj_foot();
+}
+
+static void after_load(void)                    /* a new song in place: the view and the sequencer from the start */
+{
+    seq_play = 0;
+    seq_bars = song_bars(&song);
+    ui.bar = ui.left = 0;
+    prj.auto_due = 0;
+    ui.dirty = D_ALL;
+}
+
+static void load_slot(uint32_t slot)
+{
+    prj_head_t h;
+    seq_play = 0;
+    if (prj_load(slot, &song, &h)) {
+        song_init(&song);
+        prj.cur = PRJ_NONE;
+        prj.unsaved = 1;
+        say("LOAD FAILED");
+    } else if (slot == PRJ_AUTO) {              /* the autosave: back to the slot it came from, its changes unsaved */
+        prj.cur = h.origin >= 1u && h.origin < PRJ_SLOTS ? h.origin : PRJ_NONE;
+        prj.unsaved = (h.flags & PRJ_UNSAVED) != 0;
+        say("AUTOSAVE LOADED");
+    } else {
+        prj.cur = slot;
+        prj.unsaved = 0;
+        say("LOADED");
+    }
+    after_load();
+}
+
+static void new_project(uint32_t slot)          /* empty, default sounds, 120 BPM, saved into its slot at once */
+{
+    seq_play = 0;
+    song_init(&song);
+    copy_str(song.name, "SONG ", 6);
+    song.name[5] = (char)('0' + slot);
+    song.track[0].inst = 0;                     /* LEAD SQ, BASS SAW, PAD TRI, KIT 808 */
+    song.track[1].inst = 2;
+    song.track[2].inst = 4;
+    prj.cur = slot;
+    prj.unsaved = 0;
+    if (prj_save(slot, &song, slot, 0)) { prj.unsaved = 1; say("SAVE FAILED"); }
+    else say("NEW PROJECT");
+    after_load();
+}
+
+static void save_to(uint32_t slot)
+{
+    char s[8];
+    if (prj_save(slot, &song, slot, 0)) {
+        splash_for("SAVE FAILED", "", RGB(255, 90, 80), 1200);
+        return;
+    }
+    prj.cur = slot;
+    prj.unsaved = prj.auto_due = 0;
+    prj_refresh();
+    slot_name(s, slot);
+    splash_for("SAVED", s, C_ACC, 800);
+}
+
+static void clear_slot(uint32_t slot)
+{
+    prj_clear(slot);
+    if (slot == prj.cur) { prj.cur = PRJ_NONE; prj.unsaved = 1; say("NOT SAVED"); }
+    else say("CLEARED");
+}
+
+/* SAVE held to the end of the countdown */
+static void save_now(void)
+{
+    uint32_t t = ui.mode == M_PRJ && prj.sel != PRJ_AUTO ? prj.sel : prj.cur;
+    if (t == PRJ_NONE || t == PRJ_AUTO) {       /* nowhere yet: pick a slot on PRJ */
+        uint32_t s;
+        splash_for("PICK A SLOT", "THEN HOLD SAVE", C_ACC, 1200);
+        ui.mode = M_PRJ;
+        prj_refresh();
+        for (s = 1; s < PRJ_SLOTS && prj.used[s]; s++) {}
+        prj.sel = s < PRJ_SLOTS ? s : 1u;
+        return;
+    }
+    prj_refresh();
+    if (prj.used[t] && t != prj.cur) {          /* another project there: ask first */
+        splash.on = 0;
+        ui.mode = M_PRJ;
+        prj.sel = t;
+        prj.ask = ASK_OVERWRITE;
+        prj.ask_slot = t;
+        ui.dirty = D_ALL;
+        return;
+    }
+    save_to(t);
+}
+
+/* PRJ's controls: ALGORITHM the row, OCT+ / OCT- the actions and the answers */
+static void prj_input(int32_t d, uint32_t b)
+{
+    uint32_t s = prj.sel;
+    if (d) {
+        prj.sel = (uint32_t)clamp((int32_t)prj.sel + d, 0, PRJ_SLOTS - 1);
+        prj.ask = ASK_NONE;
+        ui.dirty |= D_LANES;
+    }
+    if (b & (1u << BTN_OCT_DOWN)) {
+        if (prj.ask) prj.ask = ASK_NONE;        /* no */
+        else if (s != PRJ_AUTO && prj.used[s]) { prj.ask = ASK_CLEAR; prj.ask_slot = s; }
+        ui.dirty |= D_LANES;
+    }
+    if (b & (1u << BTN_OCT_UP)) {
+        uint32_t a = prj.ask;
+        prj.ask = ASK_NONE;
+        if (a == ASK_CLEAR) clear_slot(prj.ask_slot);
+        else if (a == ASK_LOAD) load_slot(s);
+        else if (a == ASK_NEW) new_project(s);
+        else if (a == ASK_OVERWRITE) {
+            if (seq_play) say("STOP TO SAVE");
+            else save_to(prj.ask_slot);
+        } else if (prj.used[s]) {               /* load: ask first if there is work to lose */
+            if (prj.unsaved) prj.ask = ASK_LOAD;
+            else load_slot(s);
+        } else if (s != PRJ_AUTO) {             /* an empty slot: a new project */
+            if (prj.unsaved) prj.ask = ASK_NEW;
+            else new_project(s);
+        }
+        prj_refresh();
+        ui.dirty |= D_LANES | D_HEAD;
+    }
+}
+
 static void app_init(void)
 {
-    test_song();
+    uint32_t r;
+    prj_scan();
+    r = prj_resume();
+    prj.cur = PRJ_NONE;
+    prj.sel = 1;
+    if (r != PRJ_NONE) load_slot(r);            /* where we were */
+    else test_song();                           /* nothing saved yet: the demo */
+    ui.msg_until = 0;
     seq_bars = song_bars(&song);
     ui.oct = 2;
     ui.zoom = ZOOM_1X;
@@ -733,87 +996,158 @@ static void app_init(void)
     lcd_fill(0, 0, 240, 240, C_BLACK);
 }
 
+static int32_t enc(uint32_t e)                   /* an encoder's detents, and the input noted (for the autosave) */
+{
+    int32_t d = fm1_enc_take(e);
+    if (d) prj.touched = fm1_ms;
+    return d;
+}
+
+/* SAVE: a tap opens PRJ; held, a countdown, then the save (not while playing) */
+static struct { uint32_t t0, state, shown; } hold;   /* state 0 up, 1 down, 2 counting, 3 done */
+static void save_button(uint32_t b, uint32_t rel)
+{
+    uint32_t el = fm1_ms - hold.t0;
+    if (b & (1u << BTN_SAVE)) { hold.t0 = fm1_ms; hold.state = 1; hold.shown = ~0u; el = 0; }
+    if (hold.state == 1 && el >= SAVE_TAP_MS) {
+        if (seq_play) { splash_for("STOP TO SAVE", "", RGB(255, 90, 80), 1000); hold.state = 3; }
+        else hold.state = 2;
+    }
+    if (hold.state == 2) {
+        if (el >= SAVE_HOLD_MS) {
+            hold.state = 3;
+            splash.on = 0;
+            save_now();
+        } else {
+            uint32_t left = (SAVE_HOLD_MS - el + 99u) / 100u;   /* tenths of a second */
+            if (left != hold.shown) {
+                char s[8];
+                hold.shown = left;
+                s[0] = (char)('0' + left / 10u); s[1] = '.'; s[2] = (char)('0' + left % 10u); s[3] = 0;
+                draw_splash("SAVING", s, C_ACC);
+                splash.until = 0;               /* (until the countdown ends or SAVE is let go) */
+            }
+        }
+    }
+    if (rel & (1u << BTN_SAVE)) {
+        if (hold.state == 1 && ui.mode != M_PRJ) {   /* a tap: the menu */
+            ui.mode = M_PRJ;
+            prj.ask = ASK_NONE;
+            prj.sel = prj.cur != PRJ_NONE ? prj.cur : prj.sel;
+            prj_refresh();
+            ui.dirty = D_ALL;
+        }
+        if (hold.state == 2) { splash.on = 0; ui.dirty = D_ALL; }   /* let go too soon: nothing saved */
+        hold.state = 0;
+    }
+}
+
+/* the autosave: stopped, nothing touched for 10 s, and something changed since the last one */
+static void autosave(void)
+{
+    if (!prj.auto_due || seq_play || hold.state || (fm1_ms - prj.touched) < 10000u) return;
+    prj.auto_due = 0;
+    prj_save(PRJ_AUTO, &song, prj.cur, prj.unsaved ? PRJ_UNSAVED : 0);
+    if (ui.mode == M_PRJ) { prj_refresh(); ui.dirty |= D_LANES; }
+}
+
 static void app_step(void)
 {
     uint32_t b, rel, keys, down, up, k, pos;
-    int32_t d;
+    int32_t d, pd = 0;
     uint8_t st, d1, d2;
 
-    if ((d = fm1_enc_take(ENC_ALGORITHM)) != 0) {       /* the track */
-        ui.trk = (uint32_t)clamp((int32_t)ui.trk + d, 0, SONG_TRACKS - 1);
-        ui.dirty |= D_LANES | D_FOOT;
-    }
-    if ((d = fm1_enc_take(ENC_SELECT)) != 0) {          /* the bar */
-        ui.bar = (uint32_t)clamp((int32_t)ui.bar + d, 0, SONG_BARS - 1);
-        scroll_to(ui.bar);
-        ui.dirty |= D_RULER | D_LANES | D_FOOT;
-    }
-    if ((d = fm1_enc_take(ENC_PRESETS)) != 0) {         /* the track's sound */
-        song_track_t *tr = &song.track[ui.trk];
-        tr->inst = (uint8_t)clamp((int32_t)tr->inst + d, 0, (int32_t)sounds(ui.trk) - 1);
-        ui.dirty |= D_LANES | D_FOOT;
-    }
-    if ((d = fm1_enc_take(ENC_KNOB1)) != 0) {           /* move the riff under the cursor a bar a detent */
-        uint32_t b0 = 0, a;
-        if (!song_at(&song, ui.bar, ui.trk, &b0))
-            say("NO RIFF HERE");
-        else {
-            uint32_t off = ui.bar - b0;         /* the cursor stays on the same bar of the riff */
-            a = b0;
-            for (; d > 0; d--) { uint32_t n = song_move_riff(&song, ui.trk, a, 1); if (n == a) break; a = n; }
-            for (; d < 0; d++) { uint32_t n = song_move_riff(&song, ui.trk, a, -1); if (n == a) break; a = n; }
-            if (a == b0) say("NO ROOM");
-            ui.bar = a + off < SONG_BARS ? a + off : SONG_BARS - 1u;
-            scroll_to(ui.bar);
-            seq_bars = song_bars(&song);
-            ui.dirty |= D_RULER | D_LANES | D_FOOT;
-        }
-    }
-    if ((d = fm1_enc_take(ENC_KNOB2)) != 0) {           /* repeats of the riff under the cursor: clockwise one more, back one less */
-        uint32_t b0 = 0, changed = 0;
-        if (!song_at(&song, ui.bar, ui.trk, &b0))
-            say("NO RIFF HERE");
-        else {
-            for (; d > 0; d--) { if (!song_repeat_add(&song, ui.trk, b0)) { say("NO ROOM"); break; } changed = 1; }
-            for (; d < 0; d++) { if (!song_repeat_remove(&song, ui.trk, b0)) break; changed = 1; }
-            if (changed) {
-                uint32_t first, last, end;
-                song_chain(&song, ui.trk, b0, &first, &last, &end);
-                if (!song_at(&song, ui.bar, ui.trk, 0)) ui.bar = end - 1u;   /* (the repeat it was on went) */
-                scroll_to(ui.bar);
-                {
-                    char s[24];
-                    uint32_t n = copy_str(s, "REPEATS ", 9);
-                    n += put_dec(s + n, (last - first) / riff_bars(&song.riff[ui.trk][song.cell[first][ui.trk] - 1u]));
-                    s[n] = 0;
-                    say(s);
-                }
-            }
-            seq_bars = song_bars(&song);
+    if (ui.mode == M_PRJ) {                     /* PRJ: ALGORITHM the row; SELECT (pages, later) and the knobs idle */
+        pd = enc(ENC_ALGORITHM);
+        enc(ENC_SELECT); enc(ENC_PRESETS); enc(ENC_KNOB1); enc(ENC_KNOB2); enc(ENC_KNOB3); enc(ENC_KNOB4);
+    } else {
+        if ((d = enc(ENC_ALGORITHM)) != 0) {       /* the track */
+            ui.trk = (uint32_t)clamp((int32_t)ui.trk + d, 0, SONG_TRACKS - 1);
             ui.dirty |= D_LANES | D_FOOT;
         }
-    }
-    if ((d = fm1_enc_take(ENC_KNOB3)) != 0) {           /* the loop: anticlockwise on (4 bars) and longer, clockwise shorter, off */
-        uint32_t on = song.loop_end > song.loop_start, len = on ? song.loop_end - song.loop_start : 0u, start = on ? song.loop_start : ui.bar;
-        for (; d < 0; d++) len = len ? (len < 32u ? len + 1u : 32u) : 4u;
-        for (; d > 0; d--) if (len) len--;
-        loop_set(start, len);
-        say_loop();
-        ui.dirty |= D_HEAD | D_RULER;
-    }
-    if ((d = fm1_enc_take(ENC_KNOB4)) != 0) {           /* zoom: anticlockwise out, clockwise in, a step a detent */
-        int32_t z = clamp((int32_t)ui.zoom - d, 0, 3);
-        if ((uint32_t)z != ui.zoom) {
-            ui.zoom = (uint32_t)z;
-            if (d < 0) ui.left = ui.bar >= COLS / 2u ? ui.bar - COLS / 2u : 0u;   /* out: the cursor in the middle */
-            else ui.left = ui.bar;              /* in: from where the cursor is */
-            if (ui.left > SONG_BARS - COLS) ui.left = SONG_BARS - COLS;
-            say(ZOOM_NAME[ui.zoom]);
-            ui.dirty |= D_RULER | D_LANES;
+        if ((d = enc(ENC_SELECT)) != 0) {          /* the bar */
+            ui.bar = (uint32_t)clamp((int32_t)ui.bar + d, 0, SONG_BARS - 1);
+            scroll_to(ui.bar);
+            ui.dirty |= D_RULER | D_LANES | D_FOOT;
+        }
+        if ((d = enc(ENC_PRESETS)) != 0) {         /* the track's sound */
+            song_track_t *tr = &song.track[ui.trk];
+            tr->inst = (uint8_t)clamp((int32_t)tr->inst + d, 0, (int32_t)sounds(ui.trk) - 1);
+            edited();
+            ui.dirty |= D_LANES | D_FOOT;
+        }
+        if ((d = enc(ENC_KNOB1)) != 0) {           /* move the riff under the cursor a bar a detent */
+            uint32_t b0 = 0, a;
+            if (!song_at(&song, ui.bar, ui.trk, &b0))
+                say("NO RIFF HERE");
+            else {
+                uint32_t off = ui.bar - b0;         /* the cursor stays on the same bar of the riff */
+                a = b0;
+                for (; d > 0; d--) { uint32_t n = song_move_riff(&song, ui.trk, a, 1); if (n == a) break; a = n; }
+                for (; d < 0; d++) { uint32_t n = song_move_riff(&song, ui.trk, a, -1); if (n == a) break; a = n; }
+                if (a == b0) say("NO ROOM");
+                else edited();
+                ui.bar = a + off < SONG_BARS ? a + off : SONG_BARS - 1u;
+                scroll_to(ui.bar);
+                seq_bars = song_bars(&song);
+                ui.dirty |= D_RULER | D_LANES | D_FOOT;
+            }
+        }
+        if ((d = enc(ENC_KNOB2)) != 0) {           /* repeats of the riff under the cursor: clockwise one more, back one less */
+            uint32_t b0 = 0, changed = 0;
+            if (!song_at(&song, ui.bar, ui.trk, &b0))
+                say("NO RIFF HERE");
+            else {
+                for (; d > 0; d--) { if (!song_repeat_add(&song, ui.trk, b0)) { say("NO ROOM"); break; } changed = 1; }
+                for (; d < 0; d++) { if (!song_repeat_remove(&song, ui.trk, b0)) break; changed = 1; }
+                if (changed) {
+                    uint32_t first, last, end;
+                    edited();
+                    song_chain(&song, ui.trk, b0, &first, &last, &end);
+                    if (!song_at(&song, ui.bar, ui.trk, 0)) ui.bar = end - 1u;   /* (the repeat it was on went) */
+                    scroll_to(ui.bar);
+                    {
+                        char s[24];
+                        uint32_t n = copy_str(s, "REPEATS ", 9);
+                        n += put_dec(s + n, (last - first) / riff_bars(&song.riff[ui.trk][song.cell[first][ui.trk] - 1u]));
+                        s[n] = 0;
+                        say(s);
+                    }
+                }
+                seq_bars = song_bars(&song);
+                ui.dirty |= D_LANES | D_FOOT;
+            }
+        }
+        if ((d = enc(ENC_KNOB3)) != 0) {           /* the loop: anticlockwise on (4 bars) and longer, clockwise shorter, off */
+            uint32_t on = song.loop_end > song.loop_start, len = on ? song.loop_end - song.loop_start : 0u, start = on ? song.loop_start : ui.bar;
+            for (; d < 0; d++) len = len ? (len < 32u ? len + 1u : 32u) : 4u;
+            for (; d > 0; d--) if (len) len--;
+            loop_set(start, len);
+            edited();
+            say_loop();
+            ui.dirty |= D_HEAD | D_RULER;
+        }
+        if ((d = enc(ENC_KNOB4)) != 0) {           /* zoom: anticlockwise out, clockwise in, a step a detent */
+            int32_t z = clamp((int32_t)ui.zoom - d, 0, 3);
+            if ((uint32_t)z != ui.zoom) {
+                ui.zoom = (uint32_t)z;
+                if (d < 0) ui.left = ui.bar >= COLS / 2u ? ui.bar - COLS / 2u : 0u;   /* out: the cursor in the middle */
+                else ui.left = ui.bar;              /* in: from where the cursor is */
+                if (ui.left > SONG_BARS - COLS) ui.left = SONG_BARS - COLS;
+                say(ZOOM_NAME[ui.zoom]);
+                ui.dirty |= D_RULER | D_LANES;
+            }
         }
     }
 
     b = fm1_input_edges(&rel);
+    if (b || rel) prj.touched = fm1_ms;
+    save_button(b, rel);
+    if (b & (1u << BTN_HOME) && ui.mode != M_ARR) { ui.mode = M_ARR; prj.ask = ASK_NONE; ui.dirty = D_ALL; }
+    if (ui.mode == M_PRJ) {
+        prj_input(pd, b);
+        b &= ~((1u << BTN_OCT_DOWN) | (1u << BTN_OCT_UP));   /* (the octave keys answer here, they do not shift) */
+    }
     if (b & (1u << BTN_REC)) { ui.rec = !ui.rec; ui.dirty |= D_HEAD; }
     if (b & (1u << BTN_GLO)) { seq_click = !seq_click; ui.dirty |= D_HEAD; }   /* the metronome (for now on GLO) */
     if (b & (1u << BTN_PLAY)) {
@@ -833,6 +1167,7 @@ static void app_step(void)
     down = (keys & ~ui.keys_prev) | fm1_input_note_edges();
     up = ui.keys_prev & ~keys;
     ui.keys_prev = keys;
+    if (down) prj.touched = fm1_ms;
     for (k = 0; k < 27u; k++) {
         if (up >> k & 1u) { ask(Q_OFF, ui.trk, ui.held[k], 0); midi_send(0x80u | ui.trk, ui.held[k], 0); }
         if (down >> k & 1u) {
@@ -852,8 +1187,9 @@ static void app_step(void)
     fm1_led_key(BTN_PLAY, seq_play != 0);
     fm1_led_key(BTN_REC, ui.rec != 0);
     fm1_led_key(BTN_GLO, seq_click != 0);
-    fm1_led_key(BTN_OCT_DOWN, ui.oct < 2u);
-    fm1_led_key(BTN_OCT_UP, ui.oct > 2u);
+    fm1_led_key(BTN_OCT_DOWN, ui.mode == M_PRJ ? prj.ask != 0 || (prj.sel != PRJ_AUTO && prj.used[prj.sel]) : ui.oct < 2u);
+    fm1_led_key(BTN_OCT_UP, ui.mode == M_PRJ ? 1 : ui.oct > 2u);
+    fm1_led_key(BTN_SAVE, ui.mode == M_PRJ);
     for (k = 0; k < 27u; k++) fm1_led_key(KEY_LED(k), keys >> k & 1u);
 
     /* the playhead: redraw the lanes when it moves a step; page along when it leaves the view */
@@ -869,11 +1205,24 @@ static void app_step(void)
         ui.drawn_pos = pos;
         ui.dirty |= D_LANES;
     }
-    if (ui.dirty & D_HEAD) draw_head("ARR");
-    if (ui.dirty & D_RULER) draw_ruler();
-    if (ui.dirty & D_LANES) for (k = 0; k < SONG_TRACKS; k++) draw_lane(k, pos);
+    autosave();
+    if (splash.on && splash.until && (int32_t)(splash.until - fm1_ms) <= 0) {   /* a splash's time is up */
+        splash.on = 0;
+        splash.until = 0;
+        ui.dirty = D_ALL;
+    }
+    if (splash.on) return;                      /* (the splash stays on top: nothing drawn under it) */
     if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) <= 0) { ui.msg_until = 0; ui.dirty |= D_FOOT; }
-    if (ui.dirty & D_FOOT) draw_foot();
+    if (ui.mode == M_PRJ) {
+        if (ui.dirty & D_HEAD) draw_head("PRJ");
+        if (ui.dirty & (D_RULER | D_LANES)) draw_prj();
+        else if (ui.dirty & D_FOOT) draw_prj_foot();
+    } else {
+        if (ui.dirty & D_HEAD) draw_head("ARR");
+        if (ui.dirty & D_RULER) draw_ruler();
+        if (ui.dirty & D_LANES) for (k = 0; k < SONG_TRACKS; k++) draw_lane(k, pos);
+        if (ui.dirty & D_FOOT) draw_foot();
+    }
     ui.dirty = 0;
 }
 
