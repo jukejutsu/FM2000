@@ -17,8 +17,8 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
   and note lengths: a small piano roll each, not a step pattern.
 - **Arrangement:** the song is a timeline of up to 128 bars. Put a riff on a bar and it plays through its length,
   until the next riff on that track starts.
-- **One screen, the whole song:** time runs left to right, the four tracks one under the other, every riff an
-  outlined block with its notes drawn in it, as a DAW shows a clip; the riff under the cursor lit violet.
+- **One screen, the whole song:** time runs left to right, the four tracks one under the other, every riff a
+  solid block on a faint grid, its notes drawn in it as a DAW shows a clip; the riff under the cursor lit violet.
 
 ## What works now
 

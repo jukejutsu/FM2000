@@ -532,6 +532,26 @@ static void draw_ruler(void)
 #define C_RIFF_SEL RGB(52, 42, 80)              /* the riff under the cursor: a pale violet */
 #define C_NOTE RGB(128, 128, 140)
 #define C_NOTE_SEL RGB(214, 196, 255)
+/* ARR: the grid, very faint, and the riffs as solid blocks with dark notes */
+#define C_GRID_BAR RGB(18, 18, 24)              /* a bar */
+#define C_GRID_4 RGB(30, 30, 38)                /* every 4 bars */
+#define C_GRID_LANE RGB(30, 30, 38)             /* between the tracks */
+#define C_BLOCK RGB(104, 104, 118)              /* a riff */
+#define C_BLOCK_SEL RGB(182, 156, 250)          /* the riff under the cursor */
+#define C_BLOCK_NOTE RGB(44, 44, 54)
+#define C_BLOCK_NOTE_SEL RGB(62, 38, 118)
+#define C_BLOCK_SPLIT RGB(64, 64, 76)           /* where a repeat begins */
+#define C_BLOCK_SPLIT_SEL RGB(120, 92, 196)
+
+/* a solid block with its corners rounded (1 px off each); open_l / open_r: it goes on past the view's edge there */
+static void riff_block(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t open_l, uint32_t open_r, uint16_t c)
+{
+    if (w <= 0) return;
+    cv_rect(x, y, w, h, c);
+    if (w < 3) return;
+    if (!open_l) { cv_pset(x, y, C_BLACK); cv_pset(x, y + h - 1, C_BLACK); }
+    if (!open_r) { cv_pset(x + w - 1, y, C_BLACK); cv_pset(x + w - 1, y + h - 1, C_BLACK); }
+}
 static void riff_frame(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t open_l, uint32_t open_r, uint16_t edge,
                        uint16_t fill)
 {
@@ -602,48 +622,39 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
     copy_str(kind, t == SONG_DRUM_TRACK ? "DRUM" : sound_name(t), 4);   /* what the track is: its sound, short */
     if (kind[3] == ' ') kind[3] = 0;
     cv_text_on(4, 24, &FONT_S, kind, tr->flags & SONG_MUTE ? C_MID : sel ? C_WHITE : C_TXT, sel ? C_LOW : C_BG);
-    /* the bars: empty ones a dot, each riff one block from where it starts (or comes into view) to where it ends */
+    /* the grid under it all: a faint line on every bar, a less faint one every 4 bars, one under the track
+     * (zoomed out to 0.25x, only the 4-bar lines: a line every 6 px would be a grey wash) */
+    for (c = 0; c <= COLS; c++) {
+        uint32_t bar = ui.left + c;
+        if (bar % 4u && ui.zoom == 3u) continue;
+        cv_rect(GX + (int32_t)c * BW, 0, 1, LANE_H, bar % 4u ? C_GRID_BAR : C_GRID_4);
+    }
+    cv_rect(GX, LANE_H - 1, 240 - GX, 1, C_GRID_LANE);
+    /* the riffs: a riff and its repeats are one block, a line where each repeat begins; the repeat under the cursor
+     * lit; the notes drawn dark in it at 2x and 1x, the block alone further out */
     for (c = 0; c < COLS;) {
         uint32_t bar = ui.left + c, b0 = 0, r, end, vis;
-        int32_t x = GX + (int32_t)c * BW, w;
         if (bar >= SONG_BARS) break;
         r = song_at(&song, bar, t, &b0);
-        if (!r) {
-            cv_rect(x + BW / 2, LANE_H / 2, 1, 1, bar % 4u ? RGB(34, 34, 40) : C_LOW);
-            c++;
-            continue;
-        }
+        if (!r) { c++; continue; }
         {
-            /* a riff and its repeats are one block: a line where each repeat begins */
             const song_riff_t *f = &song.riff[t][r - 1u];
-            uint32_t first, last, view_end = ui.left + COLS, len = riff_bars(f), open_l, open_r, here, a;
-            uint16_t edge;
+            uint32_t first, last, view_end = ui.left + COLS, len = riff_bars(f), open_r, a, hb = ~0u;
+            int32_t y = 3, h = LANE_H - 7;
             song_chain(&song, t, b0, &first, &last, &end);
             if (end > view_end) end = view_end;
             vis = end - bar;                    /* bars of it in view from here */
-            open_l = bar != first;              /* it began before the view */
             open_r = song_block_end(&song, t, last) > view_end;   /* it goes on past the view */
-            here = sel && ui.bar >= first && ui.bar < end;
-            edge = here ? C_RIFF_SEL_EDGE : C_RIFF_EDGE;
-            w = (int32_t)(vis * BW) - (open_r ? 0 : 1);
-            if (here) {                         /* the riff under the cursor (its own repeat): pale violet */
-                uint32_t hb = 0, he, s0, s1;
-                song_at(&song, ui.bar, t, &hb);
-                he = song_block_end(&song, t, hb);
-                s0 = hb > bar ? hb : bar;
-                s1 = he < end ? he : end;
-                cv_rect(GX + (int32_t)(s0 - ui.left) * BW + (s0 == first ? 2 : 0), 4,
-                        (int32_t)((s1 - s0) * BW) - (s0 == first ? 2 : 0) - (s1 == end && !open_r ? 2 : 0), LANE_H - 8,
-                        C_RIFF_SEL);
-            }
-            riff_frame(x + (open_l ? 0 : 1), 3, w - (open_l ? 0 : 1), LANE_H - 6, open_l, open_r, edge, C_BLACK);
-            for (a = first; a <= last; a += len) {          /* each repeat: its line, its notes */
-                uint32_t s0 = a > bar ? a : bar, s1 = a + len < end ? a + len : end;
-                int32_t xa = GX + (int32_t)(s0 - ui.left) * BW;
+            if (sel && ui.bar >= first && ui.bar < end) song_at(&song, ui.bar, t, &hb);   /* the lit repeat */
+            for (a = first; a <= last; a += len) {          /* each repeat: its block, its line, its notes */
+                uint32_t s0 = a > bar ? a : bar, s1 = a + len < end ? a + len : end, lit = a == hb;
+                int32_t xa = GX + (int32_t)(s0 - ui.left) * BW, wa = (int32_t)((s1 - s0) * BW);
                 if (s1 <= s0) continue;
-                if (a > bar) cv_rect(xa, 5, 1, LANE_H - 10, edge);
-                draw_notes(t, f, (s0 - a) * STEPS_PER_BAR, xa + 1, s1 - s0,
-                           (int32_t)((s1 - s0) * BW) - 3, here && ui.bar >= a && ui.bar < a + len ? C_NOTE_SEL : C_NOTE);
+                riff_block(xa + (s0 == first ? 1 : 0), y, wa - (s0 == first ? 1 : 0) - (s1 == end && !open_r ? 1 : 0), h,
+                           s0 != first, s1 != end || open_r, lit ? C_BLOCK_SEL : C_BLOCK);
+                if (a > bar) cv_rect(xa, y + 3, 1, h - 6, lit ? C_BLOCK_SPLIT_SEL : C_BLOCK_SPLIT);
+                if (ui.zoom <= ZOOM_1X)
+                    draw_notes(t, f, (s0 - a) * STEPS_PER_BAR, xa + 1, s1 - s0, wa - 3, lit ? C_BLOCK_NOTE_SEL : C_BLOCK_NOTE);
             }
             c += vis;
         }
