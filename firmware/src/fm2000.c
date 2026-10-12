@@ -407,13 +407,32 @@ static struct {
     uint32_t drawn_pos;                         /* the playhead drawn (a step, or ~0) */
     uint32_t rec;                               /* REC armed (recording itself: not yet) */
     uint32_t zoom;                              /* 0 2x, 1 1x, 2 0.5x, 3 0.25x */
-    uint32_t scrolling, vstep;                  /* playing: the view follows the playhead from vstep (a step, not a bar) */
+    uint32_t scrolling, vstep, vtarget;         /* playing: the view starts at vstep (sliding towards vtarget, a bar) */
     uint32_t mode;                              /* M_ARR, M_PRJ, M_RIF */
     uint32_t msg_until;                         /* the footer shows ui.msg until then (fm1_ms) */
     char msg[24];
     uint32_t dirty;
 } ui;
-enum { D_HEAD = 1, D_RULER = 2, D_LANES = 4, D_FOOT = 8, D_ALL = 15 };
+enum { D_HEAD = 1, D_RULER = 2, D_LANES = 4, D_FOOT = 8, D_ALL = 15, D_PH = 16 };   /* D_PH: the playhead alone */
+
+/* a page sliding on by a bar: from -> to in a few eased frames */
+#define SLIDE_MS 120u
+typedef struct { uint32_t from, to, t0, on; } slide_t;
+static slide_t sl_arr, sl_rif;
+static uint32_t ph_only;                        /* draw_lane: draw, but leave sending it to draw_lane_cols */
+static void slide_start(slide_t *s, uint32_t from, uint32_t to) { s->from = from; s->to = to; s->t0 = fm1_ms; s->on = 1; }
+static int slide_step(slide_t *s, uint32_t *v)  /* the slide's position now in *v: 1 while it moves (and on its last frame) */
+{
+    static const uint8_t EASE[4] = {8, 13, 15, 16};   /* sixteenths of the way at 0, 30, 60, 90 ms: fast, then settling */
+    uint32_t k, nv;
+    if (!s->on) return 0;
+    k = (fm1_ms - s->t0) / (SLIDE_MS / 4u);
+    if (k >= 4u) { nv = s->to; s->on = 0; }
+    else nv = s->from + (s->to - s->from) * EASE[k] / 16u;
+    if (nv == *v && s->on) return 0;
+    *v = nv;
+    return 1;
+}
 enum { M_ARR, M_PRJ, M_RIF };
 
 /* the project: which slot it is in, what is not saved, the PRJ screen's state */
@@ -678,7 +697,22 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
     copy_str(kind, t == SONG_DRUM_TRACK ? "DRUM" : sound_name(t), 4);   /* what the track is: its sound, short */
     if (kind[3] == ' ') kind[3] = 0;
     cv_text_on(4, 24, &FONT_S, kind, tr->flags & SONG_MUTE ? C_MID : sel ? C_WHITE : C_TXT, sel ? C_LOW : C_BG);
-    cv_blit(0, LANE_Y + t * LANE_H);
+    if (!ph_only) cv_blit(0, LANE_Y + t * LANE_H);
+}
+
+/* the lane drawn as ever, but only columns x0 .. x0 + w - 1 sent to the screen (the playhead's bar, between slides) */
+static uint16_t colbuf[64u * LANE_H];
+static void draw_lane_cols(uint32_t t, uint32_t pos, int32_t x0, int32_t w)
+{
+    uint32_t r, i;
+    draw_lane(t, pos);                          /* (draw_lane leaves the blit to us when ph_only is set) */
+    if (x0 < 0) { w += x0; x0 = 0; }
+    if (x0 + w > (int32_t)cv_w) w = (int32_t)cv_w - x0;
+    if (w <= 0 || w > 64) return;
+    for (r = 0; r < cv_h; r++)
+        for (i = 0; i < (uint32_t)w; i++) colbuf[r * (uint32_t)w + i] = cv_px[r * cv_w + (uint32_t)x0 + i];
+    lcd_blit((uint32_t)x0, LANE_Y + t * LANE_H, (uint32_t)w, cv_h, colbuf);
+    ph_only = 0;
 }
 
 static void draw_foot(void)
@@ -1026,6 +1060,7 @@ static struct {
     uint32_t step, note;                        /* the cursor */
     uint32_t left, top;                         /* the first step and the highest note in view */
     uint32_t zoom;                              /* as ARR's: 0 2x, 1 1x, 2 0.5x, 3 0.25x */
+    uint32_t target;                            /* playing: the page the view slides to */
     uint32_t aud_note, aud_until;               /* a note sounding for a moment (put in, moved) */
 } rif;
 
@@ -1618,37 +1653,51 @@ static void app_step(void)
     for (k = 0; k < 27u; k++) fm1_led_key(KEY_LED(k), keys >> k & 1u);
 
     /* the playhead: redraw the lanes when it moves a step; page along when it leaves the view */
-    /* playing, as in Music 2000: the playhead runs a bar into the view, then holds there and the page slides
-     * under it (a step at a time); a jump (the loop, the song's end) moves the page to where it went */
+    /* playing, as in Music 2000: the playhead crosses the first bar of the view; when it reaches the bar's end the
+     * page slides one bar on (quickly, in a few frames) and the playhead starts again from the left. Between two
+     * slides only the first bar's column is redrawn. A jump (the loop, the song's end) moves the page at once. */
     pos = seq_play ? seq_step : ~0u;
     if (seq_play) {
-        uint32_t span = COLS * STEPS_PER_BAR, v;
-        if (!ui.scrolling) { ui.scrolling = 1; ui.vstep = seq_from * STEPS_PER_BAR; }   /* the page from where it starts */
-        v = ui.vstep;
-        if (pos < v || pos >= v + span) v = pos / STEPS_PER_BAR * STEPS_PER_BAR;
-        else if (pos > v + STEPS_PER_BAR) v = pos - STEPS_PER_BAR;
-        if (v > SONG_BARS * STEPS_PER_BAR - span) v = SONG_BARS * STEPS_PER_BAR - span;
-        if (v != ui.vstep) { ui.vstep = v; ui.dirty |= D_RULER | D_LANES; }
+        uint32_t span = COLS * STEPS_PER_BAR, page = pos / STEPS_PER_BAR * STEPS_PER_BAR, v = ui.vstep;
+        if (page > SONG_BARS * STEPS_PER_BAR - span) page = SONG_BARS * STEPS_PER_BAR - span;   /* (the song's end) */
+        if (!ui.scrolling) {                    /* the page from where it starts */
+            ui.scrolling = 1;
+            ui.vstep = ui.vtarget = page;
+            sl_arr.on = 0;
+            ui.dirty |= D_RULER | D_LANES;
+        } else if (page != ui.vtarget) {
+            if (page == ui.vtarget + STEPS_PER_BAR) slide_start(&sl_arr, ui.vtarget, page);   /* the next bar: slide */
+            else { sl_arr.on = 0; ui.vstep = page; ui.dirty |= D_RULER | D_LANES; }           /* a jump */
+            ui.vtarget = page;
+        }
+        if (slide_step(&sl_arr, &v)) { ui.vstep = v; ui.dirty |= D_RULER | D_LANES; }
     } else if (ui.scrolling) {                  /* stopped: the page stays, on a bar */
-        ui.left = ui.vstep / STEPS_PER_BAR;
+        ui.left = ui.vtarget / STEPS_PER_BAR;
         ui.scrolling = 0;
+        sl_arr.on = 0;
         ui.dirty |= D_RULER | D_LANES;
     }
-    if (ui.mode == M_RIF) {                     /* RIF: the same, within the opened riff */
+    if (ui.mode == M_RIF) {                     /* RIF: the same, within the opened riff, a page a bar (or the view) */
         uint32_t rp = rif_pos();
         if (rp != ~0u) {
             const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
-            uint32_t thr = RIF_STEPS / 2u < STEPS_PER_BAR ? RIF_STEPS / 2u : STEPS_PER_BAR, l = rif.left;
-            uint32_t maxl = f->steps > RIF_STEPS ? f->steps - RIF_STEPS : 0u;
-            if (rp < l || rp >= l + RIF_STEPS) l = rp / RIF_STEPS * RIF_STEPS;
-            else if (rp > l + thr) l = rp - thr;
+            uint32_t pg = RIF_STEPS < STEPS_PER_BAR ? RIF_STEPS : STEPS_PER_BAR, l = rp / pg * pg, v = rif.left;
+            uint32_t maxl = f->steps > RIF_STEPS ? (f->steps - RIF_STEPS + pg - 1u) / pg * pg : 0u;
             if (l > maxl) l = maxl;
-            rif.left = l;
+            if (l != rif.target) {
+                if (l == rif.target + pg) slide_start(&sl_rif, rif.target, l);
+                else { sl_rif.on = 0; rif.left = l; }
+                rif.target = l;
+            }
+            if (slide_step(&sl_rif, &v)) rif.left = v;
+        } else {
+            sl_rif.on = 0;
+            rif.target = rif.left;
         }
-        if (rp != ui.drawn_pos) { ui.drawn_pos = rp; ui.dirty |= D_LANES; }
+        if (rp != ui.drawn_pos || sl_rif.on) { ui.drawn_pos = rp; ui.dirty |= D_LANES; }
     } else if (pos != ui.drawn_pos) {
         ui.drawn_pos = pos;
-        ui.dirty |= D_LANES;
+        if (!(ui.dirty & D_LANES)) ui.dirty |= D_PH;   /* only the playhead moved: its column */
     }
     autosave();
     if (splash.on && splash.until && (int32_t)(splash.until - fm1_ms) <= 0) {   /* a splash's time is up */
@@ -1670,6 +1719,12 @@ static void app_step(void)
         if (ui.dirty & D_HEAD) draw_head("ARR");
         if (ui.dirty & D_RULER) draw_ruler();
         if (ui.dirty & D_LANES) for (k = 0; k < SONG_TRACKS; k++) draw_lane(k, pos);
+        else if (ui.dirty & D_PH) {             /* only the playhead moved: the column it moves in */
+            int32_t x0 = xstep(ui.vtarget) - 1, w = BW + 4;
+            if (!ui.scrolling || pos == ~0u || pos / STEPS_PER_BAR * STEPS_PER_BAR != ui.vtarget)
+                for (k = 0; k < SONG_TRACKS; k++) draw_lane(k, pos);
+            else for (k = 0; k < SONG_TRACKS; k++) { ph_only = 1; draw_lane_cols(k, pos, x0, w); }
+        }
         if (ui.dirty & D_FOOT) draw_foot();
     }
     ui.dirty = 0;
