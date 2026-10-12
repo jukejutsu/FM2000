@@ -379,10 +379,6 @@ static void test_song(void)
 #define C_LOW RGB(48, 48, 56)
 #define C_BG RGB(14, 14, 20)
 #define C_PLAY RGB(110, 230, 140)
-static const uint16_t RIFF_C[8] = {RGB(180, 140, 255), RGB(90, 200, 190), RGB(240, 190, 80), RGB(240, 120, 150),
-                                   RGB(130, 210, 110), RGB(110, 170, 250), RGB(250, 150, 90), RGB(190, 190, 190)};
-static const uint16_t RIFF_D[8] = {RGB(70, 55, 105), RGB(35, 80, 76), RGB(96, 76, 32), RGB(96, 48, 60),
-                                   RGB(52, 84, 44), RGB(44, 68, 100), RGB(100, 60, 36), RGB(76, 76, 76)};
 
 #define HEAD_H 20                               /* the header */
 #define RULER_Y 20                              /* the bar numbers */
@@ -511,6 +507,36 @@ static void draw_ruler(void)
     cv_blit(0, RULER_Y);
 }
 
+/* a riff's block: a 1 px frame with rounded corners (radius 2), filled with `fill`; open_l / open_r: it goes on past
+ * the view's edge there, so no side and no corners there */
+#define C_RIFF_EDGE RGB(150, 150, 162)          /* not full white: easy on the eyes */
+#define C_RIFF_SEL_EDGE RGB(196, 172, 255)
+#define C_RIFF_SEL RGB(52, 42, 80)              /* the riff under the cursor: a pale violet */
+#define C_NOTE RGB(128, 128, 140)
+#define C_NOTE_SEL RGB(214, 196, 255)
+static void riff_frame(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t open_l, uint32_t open_r, uint16_t edge,
+                       uint16_t fill)
+{
+    int32_t l = open_l ? 0 : 2, r = open_r ? 0 : 2;   /* where the straight top / bottom start and end */
+    if (w < 3) { cv_rect(x, y, w > 0 ? w : 1, h, edge); return; }
+    if (fill != C_BLACK) {
+        int32_t x0 = open_l ? x : x + 1, x1 = open_r ? x + w : x + w - 1;
+        cv_rect(x0, y + 1, x1 - x0, h - 2, fill);
+    }
+    cv_rect(x + l, y, w - l - r, 1, edge);                 /* top */
+    cv_rect(x + l, y + h - 1, w - l - r, 1, edge);         /* bottom */
+    if (!open_l) {
+        cv_rect(x, y + 2, 1, h - 4, edge);                 /* left side, and its corners */
+        cv_pset(x + 1, y + 1, edge);
+        cv_pset(x + 1, y + h - 2, edge);
+    }
+    if (!open_r) {
+        cv_rect(x + w - 1, y + 2, 1, h - 4, edge);
+        cv_pset(x + w - 2, y + 1, edge);
+        cv_pset(x + w - 2, y + h - 2, edge);
+    }
+}
+
 /* a riff's notes inside its block, as a DAW shows a clip: time across, pitch up, the riff's own range filling the
  * block's height. off = the riff's step at x, vis bars of it in view, w px wide */
 static void draw_notes(uint32_t t, const song_riff_t *f, uint32_t off, int32_t x, uint32_t vis, int32_t w, uint16_t ink)
@@ -571,23 +597,25 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
         }
         {
             const song_riff_t *f = &song.riff[t][r - 1u];
-            uint16_t col = RIFF_C[f->color & 7u], dark = RIFF_D[f->color & 7u];
+            uint32_t here = sel && ui.bar >= b0, open_l = bar != b0, open_r;
             end = b0 + riff_bars(f);
             for (k = b0 + 1u; k < end && k < SONG_BARS; k++)   /* cut by the next riff on the track */
                 if (song.cell[k][t]) { end = k; break; }
             vis = (end < ui.left + COLS ? end : ui.left + COLS) - bar;   /* bars of it in view from here */
-            w = (int32_t)(vis * BW) - 2;
-            cv_rect(x + (bar == b0 ? 1 : 0), 3, w - (bar == b0 ? 1 : 0), LANE_H - 6, col);
-            if (bar == b0) cv_rect(x + 1, 3, 2, LANE_H - 6, dark);
-            draw_notes(t, f, (bar - b0) * STEPS_PER_BAR, x, vis, w, dark);
+            open_r = end > ui.left + COLS;      /* it goes on past the view's right edge */
+            here = here && ui.bar < end;        /* the cursor is on this riff: a pale violet fill */
+            w = (int32_t)(vis * BW) - (open_r ? 0 : 1);
+            riff_frame(x + (open_l ? 0 : 1), 3, w - (open_l ? 0 : 1), LANE_H - 6, open_l, open_r,
+                       here ? C_RIFF_SEL_EDGE : C_RIFF_EDGE, here ? C_RIFF_SEL : C_BLACK);
+            draw_notes(t, f, (bar - b0) * STEPS_PER_BAR, x + 1, vis, w - 3, here ? C_NOTE_SEL : C_NOTE);
             c += vis;
         }
     }
     /* the cursor: a frame round the bar */
     if (sel && ui.bar >= ui.left && ui.bar < ui.left + COLS) {
         int32_t x = GX + (int32_t)(ui.bar - ui.left) * BW;
-        cv_rect(x, 0, BW, 2, C_WHITE); cv_rect(x, LANE_H - 2, BW, 2, C_WHITE);
-        cv_rect(x, 0, 2, LANE_H, C_WHITE); cv_rect(x + BW - 2, 0, 2, LANE_H, C_WHITE);
+        cv_rect(x, 0, BW, 1, C_TXT); cv_rect(x, LANE_H - 1, BW, 1, C_TXT);
+        cv_rect(x, 0, 1, LANE_H, C_TXT); cv_rect(x + BW - 1, 0, 1, LANE_H, C_TXT);
     }
     /* the playhead: a line at its step */
     if (pos != ~0u && pos >= ui.left * STEPS_PER_BAR && pos < (ui.left + COLS) * STEPS_PER_BAR)
@@ -606,7 +634,7 @@ static void draw_foot(void)
         return;
     }
     n = copy_str(s, sound_name(ui.trk), 9);     /* the track's sound, left */
-    cv_text_on(6, 2, &FONT_S, s, ui.trk == SONG_DRUM_TRACK ? RIFF_C[2] : C_ACC, C_BG);
+    cv_text_on(6, 2, &FONT_S, s, C_ACC, C_BG);
     if (r) {                                    /* the riff under the cursor, right */
         const song_riff_t *f = &song.riff[ui.trk][r - 1u];
         s[0] = 'R';
