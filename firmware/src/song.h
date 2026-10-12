@@ -290,6 +290,66 @@ static uint32_t song_bars(const song_t *s)
     return 0;
 }
 
+/* the riff that starts in bar a of track t, moved one bar (dir +1 right, -1 left) along the timeline. Into empty
+ * space it just moves; a neighbour it touches (the neighbour starts inside its full length going right, or ends at
+ * or past its start going left) trades places with it instead, both keeping their full lengths, nothing cut.
+ * Returns where the moved riff starts now (a when it cannot move: the song's edge, no room, or no riff at a). */
+static uint32_t song_next_start(const song_t *s, uint32_t t, uint32_t from)   /* the first riff start > from, or SONG_BARS */
+{
+    uint32_t b;
+    for (b = from + 1u; b < SONG_BARS; b++)
+        if (s->cell[b][t]) return b;
+    return SONG_BARS;
+}
+static uint32_t song_prev_start(const song_t *s, uint32_t t, uint32_t from)   /* the last riff start < from, or SONG_BARS */
+{
+    uint32_t b = from;
+    while (b-- > 0u)
+        if (s->cell[b][t]) return b;
+    return SONG_BARS;
+}
+static uint32_t song_move_riff(song_t *s, uint32_t t, uint32_t a, int32_t dir)
+{
+    uint32_t r, la;
+    if (a >= SONG_BARS || !song_ok_track(t) || !(r = s->cell[a][t]) || !s->riff[t][r - 1u].steps) return a;
+    la = riff_bars(&s->riff[t][r - 1u]);
+    if (dir > 0) {
+        uint32_t b = song_next_start(s, t, a);
+        if (b < SONG_BARS && b <= a + la) {      /* the next one touches: B to a, A after B's full length */
+            uint32_t rb = s->cell[b][t], lb = riff_bars(&s->riff[t][rb - 1u]), c = song_next_start(s, t, b);
+            if (a + lb >= c || a + lb >= SONG_BARS) return a;   /* no room to put A after B */
+            s->cell[a][t] = 0; s->cell[b][t] = 0;
+            s->cell[a][t] = (uint8_t)rb;
+            s->cell[a + lb][t] = (uint8_t)r;
+            return a + lb;
+        }
+        if (a + 1u >= SONG_BARS) return a;
+        s->cell[a][t] = 0;
+        s->cell[a + 1u][t] = (uint8_t)r;
+        return a + 1u;
+    }
+    if (dir < 0) {
+        uint32_t p = song_prev_start(s, t, a);
+        if (p < SONG_BARS) {
+            uint32_t rp = s->cell[p][t], lp = riff_bars(&s->riff[t][rp - 1u]);
+            if (p + lp >= a) {                   /* the one before reaches A: A to p, P after A's full length */
+                uint32_t n = song_next_start(s, t, a);
+                if (p + la >= n && n < SONG_BARS) return a;   /* P would land on the riff after A */
+                if (p + la >= SONG_BARS) return a;
+                s->cell[p][t] = 0; s->cell[a][t] = 0;
+                s->cell[p][t] = (uint8_t)r;
+                s->cell[p + la][t] = (uint8_t)rp;
+                return p;
+            }
+        }
+        if (!a) return a;
+        s->cell[a][t] = 0;
+        s->cell[a - 1u][t] = (uint8_t)r;
+        return a - 1u;
+    }
+    return a;
+}
+
 /* insert / delete a whole bar (every track) at `bar`: the rest moves down / up; the last bar falls off */
 static void song_insert_bar(song_t *s, uint32_t bar)
 {

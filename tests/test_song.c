@@ -176,11 +176,49 @@ static void test_pack(void)
     printf("  fullest song: %u B packed (max %u)\n", n, (unsigned)SONG_PACK_MAX);
 }
 
+static void test_move(void)
+{
+    /* track 0: A (riff 1, 2 bars) at 2, B (riff 2, 1 bar) at 4, C (riff 3, 4 bars) at 8 */
+    song_init(&s);
+    riff_new(&s, 0, 1, 32); riff_new(&s, 0, 2, 16); riff_new(&s, 0, 3, 64);
+    song_place(&s, 2, 0, 1); song_place(&s, 4, 0, 2); song_place(&s, 8, 0, 3);
+    CHECK(song_move_riff(&s, 0, 2, -1) == 1 && s.cell[1][0] == 1 && s.cell[2][0] == 0);   /* into space */
+    CHECK(song_move_riff(&s, 0, 1, 1) == 2 && s.cell[2][0] == 1);
+    /* right: A touches B (B starts where A ends): they trade places, A after B's 1 bar */
+    CHECK(song_move_riff(&s, 0, 2, 1) == 3 && s.cell[2][0] == 2 && s.cell[3][0] == 1 && s.cell[4][0] == 0);
+    CHECK(song_at(&s, 4, 0, 0) == 1);                                                     /* A whole: 3..4 */
+    /* left: B before A touches: trade back */
+    CHECK(song_move_riff(&s, 0, 3, -1) == 2 && s.cell[2][0] == 1 && s.cell[4][0] == 2 && s.cell[3][0] == 0);
+    /* B right into space up to C, then trade with C (B 1 bar after C's 4) */
+    CHECK(song_move_riff(&s, 0, 4, 1) == 5 && song_move_riff(&s, 0, 5, 1) == 6 && song_move_riff(&s, 0, 6, 1) == 7);
+    CHECK(song_move_riff(&s, 0, 7, 1) == 11 && s.cell[7][0] == 3 && s.cell[11][0] == 2);
+    CHECK(song_at(&s, 10, 0, 0) == 3 && song_at(&s, 11, 0, 0) == 2);                      /* C not cut */
+    /* edges and nothing there */
+    CHECK(song_move_riff(&s, 0, 6, 1) == 6 && song_move_riff(&s, 1, 0, -1) == 0);
+    song_init(&s);
+    riff_new(&s, 0, 1, 16);
+    song_place(&s, 0, 0, 1);
+    CHECK(song_move_riff(&s, 0, 0, -1) == 0);
+    song_place(&s, SONG_BARS - 1u, 0, 1);
+    CHECK(song_move_riff(&s, 0, SONG_BARS - 1u, 1) == SONG_BARS - 1u);
+    /* no room: A (1 bar) at 0, B (2 bars, cut) at 1, C at 2: after B's full length A would land on C */
+    song_init(&s);
+    riff_new(&s, 0, 1, 16); riff_new(&s, 0, 2, 32); riff_new(&s, 0, 3, 16);
+    song_place(&s, 0, 0, 1); song_place(&s, 1, 0, 2); song_place(&s, 2, 0, 3);
+    CHECK(song_move_riff(&s, 0, 0, 1) == 0 && s.cell[0][0] == 1 && s.cell[1][0] == 2);
+    /* a 2-bar A, a 1-bar B right after, C after that: A lands right before C, nothing cut */
+    song_init(&s);
+    riff_new(&s, 0, 1, 32); riff_new(&s, 0, 2, 16); riff_new(&s, 0, 3, 16);
+    song_place(&s, 0, 0, 1); song_place(&s, 2, 0, 2); song_place(&s, 3, 0, 3);
+    CHECK(song_move_riff(&s, 0, 0, 1) == 1 && s.cell[0][0] == 2 && s.cell[1][0] == 1 && s.cell[3][0] == 3);
+}
+
 int main(void)
 {
     test_riffs();
     test_full_pool();
     test_arrangement();
+    test_move();
     test_pack();
     printf("song: %d of %d checks failed\n", fails, checks);
     return fails != 0;

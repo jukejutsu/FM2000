@@ -23,7 +23,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 ## What works now
 
 - The song model: tracks, riffs, notes, the arrangement, packing a song for the flash (tested: `tests/test_song.c`)
-- The ARR (arrangement) screen: cursor, scrolling, placing riffs, the playhead
+- The ARR (arrangement) screen: cursor, scrolling, zoom, moving riffs along the timeline, the playhead
 - Playback from the cursor, a loop of 1 to 32 bars, a metronome
 - A simple synth: one engine (BASIC, 7 presets) for tracks 1-3, three drum kits for track 4
 - A test song to play with
@@ -31,6 +31,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 
 ## Planned
 
+- Placing riffs on the timeline from the riff pool (it moves to its own control)
 - RIF: the riff editor (notes on a piano roll, the drum grid), entered from a block on ARR
 - Recording riffs from the keys, quantised
 - Saving songs to the flash
@@ -44,8 +45,8 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 | --- | --- | --- |
 | ALGORITHM | the track | ↑ ↓ |
 | SELECT | the bar | ← → |
-| PRESETS | the track's sound, or the drum kit on track 4 | Shift ← → |
-| KNOB 1 | the riff placed on the bar (or none) | Shift ↑ ↓ |
+| PRESETS | the track's sound, or the drum kit on track 4 | Shift ↑ ↓ |
+| KNOB 1 | move the riff under the cursor a bar left / right; it trades places with a neighbour it runs into, both kept whole | Shift ← → |
 | KNOB 2 | the loop: clockwise on (4 bars from the cursor's bar), anticlockwise off | P |
 | KNOB 3 | the loop's length, 1-32 bars | A / G |
 | KNOB 4 | zoom 2x / 1x / 0.5x / 0.25x (4 to 32 bars): anticlockwise out, clockwise in from the cursor | K, Shift K |

@@ -7,7 +7,8 @@
  *   ALGORITHM    the track (as on Felucca), clockwise: down
  *   SELECT       the bar under the cursor, clockwise: right (later in the song)
  *   PRESETS      the track's sound: tracks 1-3 a preset of their engine, track 4 (the drums) a kit
- *   KNOB 1       the riff that starts at the cursor (0 = none)
+ *   KNOB 1       move the riff under the cursor along the timeline, a bar a detent; it trades places with a riff
+ *                it runs into, both whole (placing riffs moves to another control, later)
  *   KNOB 2       the loop: clockwise on (from the cursor's bar), anticlockwise off
  *   KNOB 3       the loop's length, 1..32 bars
  *   KNOB 4       zoom 2x / 1x / 0.5x / 0.25x (4 / 8 / 16 / 32 bars in view): anticlockwise out (round the cursor),
@@ -662,7 +663,7 @@ static void scroll_to(uint32_t bar)
     else if (bar >= ui.left + COLS) ui.left = bar - COLS + 1u;
 }
 
-static uint32_t next_riff(uint32_t t, uint32_t r, int32_t d)   /* 0 and the riffs the track has, round */
+static uint32_t next_riff(uint32_t t, uint32_t r, int32_t d)   /* 0 and the riffs the track has, round (for placing, later) */
 {
     uint32_t k;
     for (k = 0; k <= SONG_RIFFS; k++) {
@@ -706,13 +707,21 @@ static void app_step(void)
         tr->inst = (uint8_t)clamp((int32_t)tr->inst + d, 0, (int32_t)sounds(ui.trk) - 1);
         ui.dirty |= D_LANES | D_FOOT;
     }
-    if ((d = fm1_enc_take(ENC_KNOB1)) != 0) {           /* the riff at the cursor */
-        uint32_t r = song.cell[ui.bar][ui.trk];
-        while (d > 0) { r = next_riff(ui.trk, r, 1); d--; }
-        while (d < 0) { r = next_riff(ui.trk, r, -1); d++; }
-        song_place(&song, ui.bar, ui.trk, r);
-        seq_bars = song_bars(&song);
-        ui.dirty |= D_LANES | D_FOOT;
+    if ((d = fm1_enc_take(ENC_KNOB1)) != 0) {           /* move the riff under the cursor a bar a detent */
+        uint32_t b0 = 0, a;
+        if (!song_at(&song, ui.bar, ui.trk, &b0))
+            say("NO RIFF HERE");
+        else {
+            uint32_t off = ui.bar - b0;         /* the cursor stays on the same bar of the riff */
+            a = b0;
+            for (; d > 0; d--) { uint32_t n = song_move_riff(&song, ui.trk, a, 1); if (n == a) break; a = n; }
+            for (; d < 0; d++) { uint32_t n = song_move_riff(&song, ui.trk, a, -1); if (n == a) break; a = n; }
+            if (a == b0) say("NO ROOM");
+            ui.bar = a + off < SONG_BARS ? a + off : SONG_BARS - 1u;
+            scroll_to(ui.bar);
+            seq_bars = song_bars(&song);
+            ui.dirty |= D_RULER | D_LANES | D_FOOT;
+        }
     }
     if ((d = fm1_enc_take(ENC_KNOB2)) != 0) {           /* the loop: clockwise on (from the cursor's bar), back off */
         if (d > 0 && song.loop_end <= song.loop_start) { ui.loop_len = 4; loop_set(ui.bar, ui.loop_len); }
