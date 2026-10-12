@@ -541,6 +541,7 @@ static void draw_ruler(void)
 #define C_BLOCK_NOTE RGB(46, 36, 76)
 #define C_BLOCK_NOTE_SEL RGB(62, 38, 118)
 #define C_BLOCK_SPLIT RGB(78, 66, 116)          /* where a repeat begins */
+#define NOTES_MIN_W 24                          /* a riff narrower than this (its whole length, in px) shows no notes */
 #define C_BLOCK_SPLIT_SEL RGB(132, 104, 208)
 
 /* a solid block with its corners rounded (1 px off each); open_l / open_r: it goes on past the view's edge there */
@@ -631,7 +632,8 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
     }
     cv_rect(GX, LANE_H - 1, 240 - GX, 1, C_GRID_LANE);
     /* the riffs: a riff and its repeats are one block, a line where each repeat begins; the repeat under the cursor
-     * lit; the notes drawn dark in it at 2x and 1x, the block alone further out */
+     * lit; its notes drawn dark in it when the riff is at least NOTES_MIN_W px long on screen (a 4-bar riff still
+     * shows them at 0.25x, a 1-bar one only from 1x) */
     for (c = 0; c < COLS;) {
         uint32_t bar = ui.left + c, b0 = 0, r, end, vis;
         if (bar >= SONG_BARS) break;
@@ -653,7 +655,7 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
                 riff_block(xa + (s0 == first ? 1 : 0), y, wa - (s0 == first ? 1 : 0) - (s1 == end && !open_r ? 1 : 0), h,
                            s0 != first, s1 != end || open_r, lit ? C_BLOCK_SEL : C_BLOCK);
                 if (a > bar) cv_rect(xa, y + 3, 1, h - 6, lit ? C_BLOCK_SPLIT_SEL : C_BLOCK_SPLIT);
-                if (ui.zoom <= ZOOM_1X)
+                if ((int32_t)len * BW >= NOTES_MIN_W)   /* notes when the riff is wide enough on screen to read them */
                     draw_notes(t, f, (s0 - a) * STEPS_PER_BAR, xa + 1, s1 - s0, wa - 3, lit ? C_BLOCK_NOTE_SEL : C_BLOCK_NOTE);
             }
             c += vis;
