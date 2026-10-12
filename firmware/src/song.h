@@ -350,6 +350,55 @@ static uint32_t song_move_riff(song_t *s, uint32_t t, uint32_t a, int32_t dir)
     return a;
 }
 
+/* repeats: the same riff placed again right where the one before ends. A chain is a riff and its repeats.
+ * song_chain finds the chain the riff starting at a belongs to (its first start, and where its last one ends,
+ * a cut by a different riff counted); song_repeat_add puts one more repeat at the chain's end when there is room
+ * for the whole riff, song_repeat_remove takes the last repeat away (never the chain's first riff). Both return
+ * 1 if they changed the song. */
+static uint32_t song_block_end(const song_t *s, uint32_t t, uint32_t a)   /* where the riff starting at a stops sounding */
+{
+    uint32_t e = a + riff_bars(&s->riff[t][s->cell[a][t] - 1u]), n = song_next_start(s, t, a);
+    if (e > SONG_BARS) e = SONG_BARS;
+    return n < e ? n : e;
+}
+static void song_chain(const song_t *s, uint32_t t, uint32_t a, uint32_t *first, uint32_t *last, uint32_t *end)
+{
+    uint32_t r = s->cell[a][t], f = a, l = a, p, e;
+    for (;;) {                                  /* back: the riff before is the same and ends exactly here */
+        p = song_prev_start(s, t, f);
+        if (p >= SONG_BARS || s->cell[p][t] != r || p + riff_bars(&s->riff[t][r - 1u]) != f) break;
+        f = p;
+    }
+    for (;;) {                                  /* on: the same riff starts exactly where this one ends */
+        e = l + riff_bars(&s->riff[t][r - 1u]);
+        if (e >= SONG_BARS || s->cell[e][t] != r) break;
+        l = e;
+    }
+    if (first) *first = f;
+    if (last) *last = l;
+    if (end) *end = song_block_end(s, t, l);
+}
+static int song_repeat_add(song_t *s, uint32_t t, uint32_t a)
+{
+    uint32_t r, l, e, len;
+    if (a >= SONG_BARS || !song_ok_track(t) || !(r = s->cell[a][t]) || !s->riff[t][r - 1u].steps) return 0;
+    song_chain(s, t, a, 0, &l, 0);
+    len = riff_bars(&s->riff[t][r - 1u]);
+    e = l + len;
+    if (e + len > SONG_BARS || song_next_start(s, t, l) < e + len) return 0;   /* the whole riff must fit */
+    s->cell[e][t] = (uint8_t)r;
+    return 1;
+}
+static int song_repeat_remove(song_t *s, uint32_t t, uint32_t a)
+{
+    uint32_t f, l;
+    if (a >= SONG_BARS || !song_ok_track(t) || !s->cell[a][t]) return 0;
+    song_chain(s, t, a, &f, &l, 0);
+    if (l == f) return 0;
+    s->cell[l][t] = 0;
+    return 1;
+}
+
 /* insert / delete a whole bar (every track) at `bar`: the rest moves down / up; the last bar falls off */
 static void song_insert_bar(song_t *s, uint32_t bar)
 {

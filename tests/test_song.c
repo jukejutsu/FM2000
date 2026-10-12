@@ -213,12 +213,44 @@ static void test_move(void)
     CHECK(song_move_riff(&s, 0, 0, 1) == 1 && s.cell[0][0] == 2 && s.cell[1][0] == 1 && s.cell[3][0] == 3);
 }
 
+static void test_repeat(void)
+{
+    uint32_t f, l, e;
+    song_init(&s);
+    riff_new(&s, 0, 1, 16); riff_new(&s, 0, 2, 32); riff_new(&s, 0, 3, 16);
+    song_place(&s, 2, 0, 1);                    /* A (1 bar) at 2, B (2 bars) at 6 */
+    song_place(&s, 6, 0, 2);
+    CHECK(song_repeat_add(&s, 0, 2) && s.cell[3][0] == 1);
+    CHECK(song_repeat_add(&s, 0, 3) && s.cell[4][0] == 1);          /* from any riff of the chain */
+    CHECK(song_repeat_add(&s, 0, 2) && s.cell[5][0] == 1);
+    CHECK(!song_repeat_add(&s, 0, 2));                              /* B at 6: no room */
+    song_chain(&s, 0, 4, &f, &l, &e);
+    CHECK(f == 2 && l == 5 && e == 6);
+    CHECK(song_repeat_remove(&s, 0, 2) && s.cell[5][0] == 0);
+    CHECK(song_repeat_remove(&s, 0, 3) && song_repeat_remove(&s, 0, 2) && s.cell[3][0] == 0);
+    CHECK(!song_repeat_remove(&s, 0, 2) && s.cell[2][0] == 1);      /* the first one stays */
+    /* a 2-bar riff needs 2 free bars: B at 6 and C at 9 leave only bar 8: no repeat; without C it fits */
+    song_place(&s, 9, 0, 3);
+    CHECK(!song_repeat_add(&s, 0, 6));
+    song_place(&s, 9, 0, 0);
+    CHECK(song_repeat_add(&s, 0, 6) && s.cell[8][0] == 2);
+    song_chain(&s, 0, 6, &f, &l, &e);
+    CHECK(f == 6 && l == 8 && e == 10);
+    /* the song's end */
+    song_init(&s);
+    riff_new(&s, 0, 1, 64);
+    song_place(&s, SONG_BARS - 8u, 0, 1);
+    CHECK(song_repeat_add(&s, 0, SONG_BARS - 8u) && !song_repeat_add(&s, 0, SONG_BARS - 8u));
+    CHECK(!song_repeat_add(&s, 1, 0) && !song_repeat_remove(&s, 1, 0));
+}
+
 int main(void)
 {
     test_riffs();
     test_full_pool();
     test_arrangement();
     test_move();
+    test_repeat();
     test_pack();
     printf("song: %d of %d checks failed\n", fails, checks);
     return fails != 0;

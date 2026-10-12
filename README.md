@@ -25,6 +25,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 - The song model: tracks, riffs, notes, the arrangement, packing a song for the flash (tested: `tests/test_song.c`)
 - The ARR (arrangement) screen: cursor, scrolling, zoom, moving riffs along the timeline, the playhead
 - Playback from the cursor, a loop of 1 to 32 bars, a metronome
+- Repeating a riff: a riff and its repeats drawn as one block, a line where each repeat begins
 - A simple synth: one engine (BASIC, 7 presets) for tracks 1-3, three drum kits for track 4
 - A test song to play with
 - The simulator: the firmware's own C code compiled to WebAssembly, on a drawn FM-1 panel
@@ -47,8 +48,8 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 | SELECT | the bar | ← → |
 | PRESETS | the track's sound, or the drum kit on track 4 | Shift ↑ ↓ |
 | KNOB 1 | move the riff under the cursor a bar left / right; it trades places with a neighbour it runs into, both kept whole | Shift ← → |
-| KNOB 2 | the loop: clockwise on (4 bars from the cursor's bar), anticlockwise off | P |
-| KNOB 3 | the loop's length, 1-32 bars | A / G |
+| KNOB 2 | repeats of the riff under the cursor: clockwise one more right after it (if it fits), anticlockwise one less | P, Shift P |
+| KNOB 3 | the loop: anticlockwise on (4 bars from the cursor) and longer, clockwise shorter down to off | A, G |
 | KNOB 4 | zoom 2x / 1x / 0.5x / 0.25x (4 to 32 bars): anticlockwise out, clockwise in from the cursor | K, Shift K |
 | PLAY | play from the cursor / stop | Space |
 | GLO | the metronome (for now) | 6 |
