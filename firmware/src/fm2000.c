@@ -390,6 +390,12 @@ static void test_song(void)
 #define C_LOW RGB(52, 66, 128)                  /* idle, empty */
 #define C_PLAY RGB(110, 250, 110)
 #define C_RED RGB(255, 72, 56)
+/* the header and the footer: Music 2000's grey bars, a light edge on top, a dark one under */
+#define C_CHROME RGB(100, 104, 118)
+#define C_CHROME_HI RGB(150, 154, 170)
+#define C_CHROME_LO RGB(52, 54, 66)
+#define C_CHROME_INK RGB(24, 28, 44)            /* dark text on the grey */
+#define C_CHROME_OFF RGB(70, 74, 88)            /* an icon that is off */
 
 /* a + (b - a) * t / 16, in RGB565 */
 static uint16_t mix565(uint16_t a, uint16_t b, uint32_t t)
@@ -415,6 +421,13 @@ static void card(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t c, uint16_
 {
     cv_rect(x, y, w, h, c);
     if (w >= 8 && h >= 8) card_corners(x, y, w, h, c, bg, 1, 1);
+}
+static void chrome_bar(uint32_t h)              /* a canvas h tall with the grey bar in it, bevelled */
+{
+    cv_begin(240, h, C_BG);
+    card(1, 1, 238, (int32_t)h - 2, C_CHROME, C_BG);
+    cv_rect(4, 1, 232, 1, C_CHROME_HI);
+    cv_rect(4, (int32_t)h - 2, 232, 1, C_CHROME_LO);
 }
 
 #define HEAD_H 20                               /* the header */
@@ -543,17 +556,19 @@ static void draw_head(const char *screen)
 {
     char bpm[8] = "000.0";
     const char *v;
-    int32_t x = (240 - (4 * 11 + 3 * 8)) / 2;   /* the four icons, 8 px apart, in the middle */
+    int32_t x = (240 - (4 * 11 + 3 * 8)) / 2 - 8, w;   /* the four icons, 8 px apart, a little left of the middle */
     put_num(bpm, song.bpm10 / 10u, 3);
     bpm[4] = (char)('0' + song.bpm10 % 10u);
-    cv_begin(240, HEAD_H, C_BG);
-    cv_text_on(6, 1, &FONT_M, screen, C_ACC, C_BG);
-    cv_icon(x, 4, ICON_PLAY, seq_play ? C_PLAY : C_LOW);
-    cv_icon(x + 19, 4, ICON_REC, ui.rec ? C_RED : C_LOW);
-    cv_icon(x + 38, 4, ICON_LOOP, song.loop_end > song.loop_start ? C_ACC : C_LOW);
-    cv_icon(x + 57, 4, ICON_METRO, seq_click ? C_ACC : C_LOW);
-    v = bpm[0] == '0' ? bpm + 1 : bpm;          /* the tempo, right, in the accent */
-    cv_text_on(240 - 6 - text_w(&FONT_M, v), 1, &FONT_M, v, C_ACC, C_BG);
+    chrome_bar(HEAD_H);
+    cv_text_on(8, 1, &FONT_M, screen, C_TXT, C_CHROME);
+    cv_icon(x, 5, ICON_PLAY, seq_play ? C_PLAY : C_CHROME_OFF);
+    cv_icon(x + 19, 5, ICON_REC, ui.rec ? C_RED : C_CHROME_OFF);
+    cv_icon(x + 38, 5, ICON_LOOP, song.loop_end > song.loop_start ? C_ACC : C_CHROME_OFF);
+    cv_icon(x + 57, 5, ICON_METRO, seq_click ? C_ACC : C_CHROME_OFF);
+    v = bpm[0] == '0' ? bpm + 1 : bpm;          /* the tempo, right, in a dark display as on Music 2000 */
+    w = text_w(&FONT_M, v) + 10;
+    card(236 - w, 3, w, 14, C_BG, C_CHROME);
+    cv_text_on(241 - w, 0, &FONT_M, v, C_ACC, C_BG);
     cv_blit(0, 0);
 }
 
@@ -765,14 +780,14 @@ static void draw_foot(void)
 {
     char s[32];
     uint32_t b0 = 0, r = song_at(&song, ui.bar, ui.trk, &b0), n;
-    cv_begin(240, 20, C_BG);
+    chrome_bar(20);
     if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0) {   /* a short message after a change */
-        cv_text_on(6, 2, &FONT_S, ui.msg, C_TXT, C_BG);
+        cv_text_on(8, 2, &FONT_S, ui.msg, C_TXT, C_CHROME);
         cv_blit(0, FOOT_Y);
         return;
     }
     n = copy_str(s, sound_name(ui.trk), 9);     /* the track's sound, left */
-    cv_text_on(6, 2, &FONT_S, s, C_ACC, C_BG);
+    cv_text_on(8, 2, &FONT_S, s, C_TXT, C_CHROME);
     if (r) {                                    /* the riff under the cursor, right */
         const song_riff_t *f = &song.riff[ui.trk][r - 1u];
         s[0] = 'R';
@@ -782,7 +797,7 @@ static void draw_foot(void)
         if (b0 != ui.bar) { s[n++] = ' '; s[n++] = '+'; s[n++] = (char)('0' + (ui.bar - b0)); s[n] = 0; }
     } else
         copy_str(s, "--", 3);
-    cv_text_on(240 - 6 - text_w(&FONT_S, s), 2, &FONT_S, s, C_TXT, C_BG);
+    cv_text_on(240 - 8 - text_w(&FONT_S, s), 2, &FONT_S, s, C_CHROME_INK, C_CHROME);
     cv_blit(0, FOOT_Y);
 }
 
@@ -928,9 +943,9 @@ static void draw_prj_foot(void)
 {
     char s[32];
     uint32_t n;
-    cv_begin(240, 20, C_BG);
+    chrome_bar(20);
     if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0)
-        cv_text_on(6, 2, &FONT_S, ui.msg, C_TXT, C_BG);
+        cv_text_on(8, 2, &FONT_S, ui.msg, C_TXT, C_CHROME);
     else if (prj.ask) {                         /* the question, and its two answers */
         static const char *const Q[] = {"", "CLEAR ", "DISCARD CHANGES?", "DISCARD CHANGES?", "OVERWRITE "};
         n = copy_str(s, Q[prj.ask], 20);
@@ -939,14 +954,14 @@ static void draw_prj_foot(void)
             n += 6u;
             s[n++] = '?'; s[n] = 0;
         }
-        cv_text_on(6, 2, &FONT_S, s, C_TXT, C_BG);
-        cv_text_on(234 - text_w(&FONT_S, "+ YES  - NO"), 2, &FONT_S, "+ YES  - NO", C_ACC, C_BG);
+        cv_text_on(8, 2, &FONT_S, s, C_TXT, C_CHROME);
+        cv_text_on(234 - text_w(&FONT_S, "+ YES  - NO"), 2, &FONT_S, "+ YES  - NO", C_TXT, C_CHROME);
     } else if (prj.sel == PRJ_AUTO)
-        cv_text_on(6, 2, &FONT_S, prj.used[0] ? "OCT+ LOAD" : "", C_MID, C_BG);
+        cv_text_on(8, 2, &FONT_S, prj.used[0] ? "OCT+ LOAD" : "", C_CHROME_INK, C_CHROME);
     else if (prj.used[prj.sel])
-        cv_text_on(6, 2, &FONT_S, "OCT+ LOAD   OCT- CLEAR", C_MID, C_BG);
+        cv_text_on(8, 2, &FONT_S, "OCT+ LOAD   OCT- CLEAR", C_CHROME_INK, C_CHROME);
     else
-        cv_text_on(6, 2, &FONT_S, "OCT+ NEW   HOLD SAVE: SAVE", C_MID, C_BG);
+        cv_text_on(8, 2, &FONT_S, "OCT+ NEW   HOLD SAVE: SAVE", C_CHROME_INK, C_CHROME);
     cv_blit(0, FOOT_Y);
 }
 
@@ -1291,16 +1306,16 @@ static void draw_rif_foot(void)
     const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
     char s[32], nn[6];
     uint32_t n;
-    cv_begin(240, 20, C_BG);
+    chrome_bar(20);
     if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0) {
-        cv_text_on(6, 2, &FONT_S, ui.msg, C_TXT, C_BG);
+        cv_text_on(8, 2, &FONT_S, ui.msg, C_TXT, C_CHROME);
     } else {
         s[0] = 'R'; put_num(s + 1, rif.r, 2); s[3] = ' ';
         n = 4u + copy_str(s + 4, f->name, RIFF_NAME);
         s[n++] = ' '; s[n++] = ' ';
         n += put_dec(s + n, f->steps);
         copy_str(s + n, " ST", 4);
-        cv_text_on(6, 2, &FONT_S, s, C_ACC, C_BG);
+        cv_text_on(8, 2, &FONT_S, s, C_TXT, C_CHROME);
         n = put_dec(s, rif.step + 1u);         /* where the cursor is: the step, the note (and its length) */
         s[n++] = ' '; s[n++] = ' ';
         if (rif.trk == SONG_DRUM_TRACK && drum_name(rif.note)) n += copy_str(s + n, drum_name(rif.note), 6);
@@ -1309,7 +1324,7 @@ static void draw_rif_foot(void)
             int32_t i = rif_note_here();
             if (i >= 0) { n += copy_str(s + n, "  L", 4); put_dec(s + n, song.ev[i].len); s[n + (song.ev[i].len >= 10u ? 2 : 1)] = 0; }
         }
-        cv_text_on(234 - text_w(&FONT_S, s), 2, &FONT_S, s, C_TXT, C_BG);
+        cv_text_on(232 - text_w(&FONT_S, s), 2, &FONT_S, s, C_CHROME_INK, C_CHROME);
     }
     cv_blit(0, FOOT_Y);
 }
@@ -1425,9 +1440,9 @@ static void draw_edt(void)
 
 static void draw_edt_foot(void)
 {
-    cv_begin(240, 20, C_BG);
-    if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0) cv_text_on(6, 2, &FONT_S, ui.msg, C_TXT, C_BG);
-    else cv_text_on(6, 2, &FONT_S, "K1 VALUE   EDIT BACK", C_MID, C_BG);
+    chrome_bar(20);
+    if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0) cv_text_on(8, 2, &FONT_S, ui.msg, C_TXT, C_CHROME);
+    else cv_text_on(8, 2, &FONT_S, "K1 VALUE   EDIT BACK", C_CHROME_INK, C_CHROME);
     cv_blit(0, FOOT_Y);
 }
 
