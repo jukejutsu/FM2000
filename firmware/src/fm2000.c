@@ -536,12 +536,12 @@ static void draw_ruler(void)
 #define C_GRID_BAR RGB(18, 18, 24)              /* a bar */
 #define C_GRID_4 RGB(30, 30, 38)                /* every 4 bars */
 #define C_GRID_LANE RGB(30, 30, 38)             /* between the tracks */
-#define C_BLOCK RGB(104, 104, 118)              /* a riff */
-#define C_BLOCK_SEL RGB(182, 156, 250)          /* the riff under the cursor */
-#define C_BLOCK_NOTE RGB(44, 44, 54)
+#define C_BLOCK RGB(112, 98, 156)               /* a riff: a muted violet */
+#define C_BLOCK_SEL RGB(196, 174, 255)          /* the riff under the cursor: light lilac */
+#define C_BLOCK_NOTE RGB(46, 36, 76)
 #define C_BLOCK_NOTE_SEL RGB(62, 38, 118)
-#define C_BLOCK_SPLIT RGB(64, 64, 76)           /* where a repeat begins */
-#define C_BLOCK_SPLIT_SEL RGB(120, 92, 196)
+#define C_BLOCK_SPLIT RGB(78, 66, 116)          /* where a repeat begins */
+#define C_BLOCK_SPLIT_SEL RGB(132, 104, 208)
 
 /* a solid block with its corners rounded (1 px off each); open_l / open_r: it goes on past the view's edge there */
 static void riff_block(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t open_l, uint32_t open_r, uint16_t c)
