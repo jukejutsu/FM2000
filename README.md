@@ -37,7 +37,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 ## Planned
 
 - Placing riffs on the timeline from the riff pool (it moves to its own control)
-- RIF: velocity, the riff's length, copy / paste, recording from the keys
+- RIF: copy / paste, recording from the keys; more riff and note settings on EDT
 - Recording riffs from the keys, quantised
 - Real sound engines for tracks 1-3 (from the Felucca family) and better drum kits
 - MIX, SND (sound editing), SNG (song settings) screens
@@ -74,6 +74,19 @@ SEQ on a riff opens its piano roll; HOME or SEQ goes back. Time across, pitch up
 | KNOB 2 | move the note up / down | P, Shift P |
 | KNOB 3 | the note's length | A, G |
 | KNOB 4 | zoom: 8 / 16 / 32 / 64 steps in view | K, Shift K |
+
+## A riff's settings (EDT screen)
+
+EDIT on RIF opens the riff's settings; EDIT goes back to the roll, HOME to ARR. SELECT picks the tab, ALGORITHM the
+row, KNOB 1 changes the value.
+
+| Tab | Setting | Values |
+| --- | --- | --- |
+| RIFF | LENGTH | 1 to 64 steps (notes past a shorter end go, notes running past it are cut) |
+| NOTE (with a note at the cursor) | VELOCITY | 1 to 127, sounded as it changes |
+
+On ARR a riff that does not fill its last bar (12 steps, 24 steps) is drawn as long as it is: the rest of the bar
+stays empty, and its repeats start on the next bar.
 
 ## Projects (PRJ screen)
 

@@ -408,7 +408,7 @@ static struct {
     uint32_t rec;                               /* REC armed (recording itself: not yet) */
     uint32_t zoom;                              /* 0 2x, 1 1x, 2 0.5x, 3 0.25x */
     uint32_t scrolling, vstep, vtarget;         /* playing: the view starts at vstep (sliding towards vtarget, a bar) */
-    uint32_t mode;                              /* M_ARR, M_PRJ, M_RIF */
+    uint32_t mode;                              /* M_ARR, M_PRJ, M_RIF, M_EDT */
     uint32_t msg_until;                         /* the footer shows ui.msg until then (fm1_ms) */
     char msg[24];
     uint32_t dirty;
@@ -433,7 +433,7 @@ static int slide_step(slide_t *s, uint32_t *v)  /* the slide's position now in *
     *v = nv;
     return 1;
 }
-enum { M_ARR, M_PRJ, M_RIF };
+enum { M_ARR, M_PRJ, M_RIF, M_EDT };
 
 /* the project: which slot it is in, what is not saved, the PRJ screen's state */
 enum { ASK_NONE, ASK_CLEAR, ASK_LOAD, ASK_NEW, ASK_OVERWRITE };
@@ -670,11 +670,18 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
             if (sel && ui.bar >= first && ui.bar < end) song_at(&song, ui.bar, t, &hb);   /* the lit repeat */
             for (a = first; a <= last; a += len) {          /* each repeat: its block, its line, its notes */
                 uint32_t s0 = a > bar ? a : bar, s1 = a + len < end ? a + len : end, lit = a == hb;
+                uint32_t full = f->steps % STEPS_PER_BAR == 0u, e_st = a * STEPS_PER_BAR + f->steps;
                 int32_t xa = xstep(s0 * STEPS_PER_BAR), wa = xstep(s1 * STEPS_PER_BAR) - xa;
                 if (s1 <= s0) continue;
-                riff_block(xa + (s0 == first ? 1 : 0), y, wa - (s0 == first ? 1 : 0) - (s1 == end && !open_r ? 1 : 0), h,
-                           s0 != first, s1 != end || open_r, lit ? C_BLOCK_SEL : C_BLOCK);
-                if (a > bar) cv_rect(xa, y + 3, 1, h - 6, lit ? C_BLOCK_SPLIT_SEL : C_BLOCK_SPLIT);
+                if (!full) {                    /* a riff that ends inside a bar: its own block, as long as it is */
+                    if (e_st < s1 * STEPS_PER_BAR) wa = xstep(e_st) - xa;
+                    riff_block(xa + (s0 == a ? 1 : 0), y, wa - (s0 == a ? 1 : 0) - 1, h, s0 != a,
+                               e_st > s1 * STEPS_PER_BAR, lit ? C_BLOCK_SEL : C_BLOCK);
+                } else {
+                    riff_block(xa + (s0 == first ? 1 : 0), y, wa - (s0 == first ? 1 : 0) - (s1 == end && !open_r ? 1 : 0), h,
+                               s0 != first, s1 != end || open_r, lit ? C_BLOCK_SEL : C_BLOCK);
+                    if (a > bar) cv_rect(xa, y + 3, 1, h - 6, lit ? C_BLOCK_SPLIT_SEL : C_BLOCK_SPLIT);
+                }
                 if ((int32_t)len * BW >= NOTES_MIN_W)   /* notes when the riff is wide enough on screen to read them */
                     draw_notes(t, f, (s0 - a) * STEPS_PER_BAR, xa + 1, s1 - s0, wa - 3, lit ? C_BLOCK_NOTE_SEL : C_BLOCK_NOTE);
             }
@@ -1075,14 +1082,15 @@ static int32_t rif_note_here(void)
     }
     return -1;
 }
-static void audition(uint32_t note)             /* the note, briefly, on the riff's track */
+static void audition_vel(uint32_t note, uint32_t vel)   /* the note, briefly, on the riff's track */
 {
     if (rif.aud_until) ask(Q_OFF, rif.trk, rif.aud_note, 0);
-    ask(Q_ON, rif.trk, note, 100);
+    ask(Q_ON, rif.trk, note, vel);
     rif.aud_note = note;
     rif.aud_until = fm1_ms + 180u;
     if (!rif.aud_until) rif.aud_until = 1;
 }
+static void audition(uint32_t note) { audition_vel(note, 100); }
 
 static const char *drum_name(uint32_t n)        /* General MIDI's names, short; 0 for notes without one */
 {
@@ -1275,6 +1283,141 @@ static void draw_rif(void)
     draw_rif_rows(18, 2, pos);
 }
 
+/* ================================================================== EDT: the riff's settings (EDIT on RIF) */
+/* Tabs (SELECT): RIFF, and NOTE when the cursor is on a note. ALGORITHM picks a row, KNOB 1 changes its value.
+ * EDIT goes back to the roll, HOME to ARR.
+ *   RIFF   LENGTH     1..64 steps (notes past a shorter end go, notes running past it are cut)
+ *   NOTE   VELOCITY   1..127 (sounded as it changes) */
+enum { TAB_RIFF, TAB_NOTE };
+static struct { uint32_t tab, row; } edt;
+static const char *const EDT_TAB[2] = {"RIFF", "NOTE"};
+static const uint32_t EDT_ROWS[2] = {1, 1};
+#define EDT_ROW_Y 44
+#define EDT_ROW_H 24
+
+static void edt_value(char *s, uint32_t tab, uint32_t row)   /* the row's value as text */
+{
+    const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
+    uint32_t n;
+    (void)row;
+    if (tab == TAB_RIFF) {                      /* "24 STEPS  1.5 BARS" */
+        n = put_dec(s, f->steps);
+        n += copy_str(s + n, f->steps == 1u ? " STEP" : " STEPS", 7);
+        s[n] = 0;
+    } else {
+        int32_t i = rif_note_here();
+        if (i < 0) copy_str(s, "-", 2);
+        else { n = put_dec(s, song.ev[i].vel); s[n] = 0; }
+    }
+}
+
+static void draw_edt(void)
+{
+    uint32_t tb, r, has_note = rif_note_here() >= 0;
+    char s[24];
+    /* the tabs */
+    cv_begin(240, 24, C_BLACK);
+    for (tb = 0; tb < 2u; tb++) {
+        int32_t x = 6 + (int32_t)tb * 76, w = 70, on = tb == edt.tab, off = tb == TAB_NOTE && !has_note;
+        if (on) riff_frame(x, 2, w, 20, 0, 0, C_RIFF_SEL_EDGE, C_RIFF_SEL);
+        cv_text_on(x + (w - text_w(&FONT_S, EDT_TAB[tb])) / 2, 4, &FONT_S, EDT_TAB[tb],
+                   on ? C_WHITE : off ? C_LOW : C_MID, on ? C_RIFF_SEL : C_BLACK);
+    }
+    cv_rect(0, 23, 240, 1, C_GRID_4);
+    cv_blit(0, 20);
+    lcd_fill(0, 44, 240, FOOT_Y - 44, C_BLACK);
+    /* what it is about: the riff, and the note */
+    cv_begin(240, 20, C_BLACK);
+    {
+        const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
+        uint32_t n;
+        s[0] = 'R'; put_num(s + 1, rif.r, 2); s[3] = ' ';
+        n = 4u + copy_str(s + 4, f->name, RIFF_NAME);
+        if (edt.tab == TAB_NOTE && has_note) {
+            char nn[6];
+            n += copy_str(s + n, "  ", 3);
+            if (rif.trk == SONG_DRUM_TRACK && drum_name(rif.note)) n += copy_str(s + n, drum_name(rif.note), 6);
+            else { note_name(nn, rif.note); n += copy_str(s + n, nn, 5); }
+            n += copy_str(s + n, " @", 3);
+            n += put_dec(s + n, rif.step + 1u);
+            s[n] = 0;
+        }
+        cv_text_on(6, 2, &FONT_S, s, C_ACC, C_BLACK);
+    }
+    cv_blit(0, 46);
+    /* the rows: name left, value right; the chosen one lit */
+    for (r = 0; r < EDT_ROWS[edt.tab]; r++) {
+        static const char *const NAME[2][1] = {{"LENGTH"}, {"VELOCITY"}};
+        uint32_t sel = r == edt.row;
+        uint16_t bg = sel ? C_RIFF_SEL : C_BLACK;
+        cv_begin(240, EDT_ROW_H, C_BLACK);
+        if (sel) riff_frame(4, 1, 232, EDT_ROW_H - 2, 0, 0, C_RIFF_SEL_EDGE, C_RIFF_SEL);
+        cv_text_on(14, 4, &FONT_S, NAME[edt.tab][r], sel ? C_WHITE : C_TXT, bg);
+        edt_value(s, edt.tab, r);
+        cv_text_on(226 - text_w(&FONT_M, s), 3, &FONT_M, s, sel ? C_WHITE : C_TXT, bg);
+        cv_blit(0, EDT_ROW_Y + 26 + r * EDT_ROW_H);
+    }
+    /* a bar of the value, under the row */
+    if (edt.tab == TAB_RIFF) {
+        const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
+        uint32_t k;
+        cv_begin(240, 14, C_BLACK);
+        for (k = 0; k < RIFF_MAX_STEPS; k++)     /* 64 steps, the riff's lit, a gap every bar */
+            cv_rect(14 + (int32_t)(k * 3u) + (int32_t)(k / 16u) * 3, 3, 2, 8,
+                    k < f->steps ? (k % 4u ? C_BLOCK : C_BLOCK_SEL) : C_LOW);
+        cv_blit(0, EDT_ROW_Y + 26 + EDT_ROW_H + 4);
+    } else if (has_note) {
+        int32_t i = rif_note_here();
+        cv_begin(240, 14, C_BLACK);
+        cv_rect(14, 5, 212, 4, C_LOW);
+        cv_rect(14, 5, (int32_t)(212u * song.ev[i].vel / 127u), 4, C_BLOCK_SEL);
+        cv_blit(0, EDT_ROW_Y + 26 + EDT_ROW_H + 4);
+    }
+}
+
+static void draw_edt_foot(void)
+{
+    cv_begin(240, 20, C_BG);
+    if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0) cv_text_on(6, 2, &FONT_S, ui.msg, C_WHITE, C_BG);
+    else cv_text_on(6, 2, &FONT_S, "K1 VALUE   EDIT BACK", C_MID, C_BG);
+    cv_blit(0, FOOT_Y);
+}
+
+static void edt_input(int32_t dsel, int32_t dalg, int32_t dk1)
+{
+    const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
+    if (dsel) {                                 /* the tabs: NOTE only with a note under the cursor */
+        uint32_t tab = (uint32_t)clamp((int32_t)edt.tab + dsel, 0, 1);
+        if (tab == TAB_NOTE && rif_note_here() < 0) say("NO NOTE AT THE CURSOR");
+        else { edt.tab = tab; edt.row = 0; }
+        ui.dirty |= D_LANES | D_FOOT;
+    }
+    if (dalg) {
+        edt.row = (uint32_t)clamp((int32_t)edt.row + dalg, 0, (int32_t)EDT_ROWS[edt.tab] - 1);
+        ui.dirty |= D_LANES;
+    }
+    if (dk1) {
+        if (edt.tab == TAB_RIFF) {              /* the riff's length */
+            uint32_t st = (uint32_t)clamp((int32_t)f->steps + dk1, 1, (int32_t)RIFF_MAX_STEPS);
+            if (st != f->steps) {
+                riff_set_steps(&song, rif.trk, rif.r, st);
+                if (rif.step >= st) rif.step = st - 1u;
+                if (rif.left >= st) rif.left = 0;
+                seq_bars = song_bars(&song);
+                edited();
+            }
+        } else {
+            int32_t i = rif_note_here();
+            if (i >= 0) {
+                song.ev[i].vel = (uint8_t)clamp((int32_t)song.ev[i].vel + dk1, 1, 127);
+                audition_vel(song.ev[i].note, song.ev[i].vel);
+                edited();
+            }
+        }
+        ui.dirty |= D_LANES;
+    }
+}
+
 /* ARR's SEQ: on an empty bar a new riff (16 steps); on a riff, tapped: RIF; held 2 s: the riff deleted */
 #define DEL_HOLD_MS 2000u
 static void new_riff_here(void)
@@ -1422,6 +1565,10 @@ static void app_step(void)
     if (ui.mode == M_PRJ) {                     /* PRJ: ALGORITHM the row; SELECT (pages, later) and the knobs idle */
         pd = enc(ENC_ALGORITHM);
         enc(ENC_SELECT); enc(ENC_PRESETS); enc(ENC_KNOB1); enc(ENC_KNOB2); enc(ENC_KNOB3); enc(ENC_KNOB4);
+    } else if (ui.mode == M_EDT) {              /* EDT: SELECT the tab, ALGORITHM the row, KNOB 1 the value */
+        int32_t ds = enc(ENC_SELECT), da = enc(ENC_ALGORITHM), d1 = enc(ENC_KNOB1);
+        edt_input(ds, da, d1);
+        enc(ENC_PRESETS); enc(ENC_KNOB2); enc(ENC_KNOB3); enc(ENC_KNOB4);
     } else if (ui.mode == M_RIF) {              /* RIF: SELECT the step, ALGORITHM the note (clockwise: down) */
         const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
         if ((d = enc(ENC_SELECT)) != 0) {
@@ -1585,6 +1732,14 @@ static void app_step(void)
     if (b || rel) prj.touched = fm1_ms;
     save_button(b, rel);
     seq_button(b, rel);
+    if (b & (1u << BTN_EDIT)) {                 /* EDIT: the opened riff's settings, and back */
+        if (ui.mode == M_RIF) {
+            ui.mode = M_EDT;
+            edt.tab = rif_note_here() >= 0 ? TAB_NOTE : TAB_RIFF;   /* on a note: its settings first */
+            edt.row = 0;
+            ui.dirty = D_ALL;
+        } else if (ui.mode == M_EDT) { ui.mode = M_RIF; ui.dirty = D_ALL; }
+    }
     if (b & (1u << BTN_HOME) && ui.mode != M_ARR) { ui.mode = M_ARR; prj.ask = ASK_NONE; ui.dirty = D_ALL; }
     if (ui.mode == M_PRJ) {
         prj_input(pd, b);
@@ -1650,6 +1805,7 @@ static void app_step(void)
     fm1_led_key(BTN_OCT_UP, ui.mode == M_PRJ ? 1 : ui.mode == M_RIF ? rif_note_here() < 0 : ui.oct > 2u);
     fm1_led_key(BTN_SAVE, ui.mode == M_PRJ);
     fm1_led_key(BTN_SEQ, ui.mode == M_RIF);
+    fm1_led_key(BTN_EDIT, ui.mode == M_EDT);
     for (k = 0; k < 27u; k++) fm1_led_key(KEY_LED(k), keys >> k & 1u);
 
     /* the playhead: redraw the lanes when it moves a step; page along when it leaves the view */
@@ -1707,7 +1863,11 @@ static void app_step(void)
     }
     if (splash.on) return;                      /* (the splash stays on top: nothing drawn under it) */
     if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) <= 0) { ui.msg_until = 0; ui.dirty |= D_FOOT; }
-    if (ui.mode == M_RIF) {
+    if (ui.mode == M_EDT) {
+        if (ui.dirty & D_HEAD) draw_head("EDT");
+        if (ui.dirty & (D_RULER | D_LANES)) draw_edt();
+        if (ui.dirty & (D_FOOT | D_RULER | D_LANES)) draw_edt_foot();
+    } else if (ui.mode == M_RIF) {
         if (ui.dirty & D_HEAD) draw_head("RIF");
         if (ui.dirty & (D_RULER | D_LANES)) draw_rif();
         if (ui.dirty & (D_FOOT | D_RULER | D_LANES)) draw_rif_foot();
