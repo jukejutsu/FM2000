@@ -378,17 +378,18 @@ static void test_song(void)
 }
 
 /* ================================================================== the screen: ARRANGE, time left to right */
-/* the look: Felucca's soft one, in its violet. A dark violet screen, rounded cards a step lighter, a lilac
- * accent; values large and in the accent, labels small and muted. */
-#define C_BG RGB(24, 19, 36)                    /* the screen */
-#define C_PANEL RGB(40, 32, 60)                 /* a card */
-#define C_PANEL_HI RGB(58, 46, 88)              /* the chosen card */
-#define C_ACC RGB(188, 152, 255)                /* lilac */
-#define C_TXT RGB(234, 228, 248)
-#define C_MID RGB(152, 136, 192)                /* labels */
-#define C_LOW RGB(86, 74, 118)                  /* idle, empty */
-#define C_PLAY RGB(120, 232, 150)
-#define C_RED RGB(255, 96, 96)
+/* the look: Felucca's soft shapes (rounded cards, values large, labels small) in Music 2000's colours: a deep
+ * navy screen, navy cells with blue bar lines, green riffs, a bright blue accent, white text. */
+#define C_BG RGB(8, 12, 44)                     /* the screen */
+#define C_PANEL RGB(16, 24, 84)                 /* a card, the grid's cells */
+#define C_PANEL_HI RGB(26, 42, 132)             /* the chosen card */
+#define C_ACC RGB(70, 150, 255)                 /* blue */
+#define C_ON_ACC RGB(255, 255, 255)             /* text on the accent */
+#define C_TXT RGB(240, 244, 255)
+#define C_MID RGB(150, 168, 214)                /* labels */
+#define C_LOW RGB(52, 66, 128)                  /* idle, empty */
+#define C_PLAY RGB(110, 250, 110)
+#define C_RED RGB(255, 72, 56)
 
 /* a + (b - a) * t / 16, in RGB565 */
 static uint16_t mix565(uint16_t a, uint16_t b, uint32_t t)
@@ -590,18 +591,18 @@ static void draw_ruler(void)
 #define C_RIFF_SEL_EDGE C_ACC
 #define C_RIFF_SEL C_PANEL_HI
 #define C_NOTE RGB(128, 128, 140)
-#define C_NOTE_SEL RGB(214, 196, 255)
+#define C_NOTE_SEL RGB(170, 255, 200)
 /* ARR: the grid, very faint, and the riffs as solid blocks with dark notes */
-#define C_GRID_BAR RGB(48, 39, 72)              /* a bar (on a card) */
-#define C_GRID_4 RGB(66, 54, 98)                /* every 4 bars */
+#define C_GRID_BAR RGB(26, 40, 120)             /* a bar (on a card) */
+#define C_GRID_4 RGB(44, 88, 220)               /* every 4 bars: the Music 2000 blue */
 #define C_GRID_LANE RGB(30, 30, 38)             /* between the tracks */
-#define C_BLOCK RGB(116, 94, 182)               /* a riff: a muted violet */
-#define C_BLOCK_SEL RGB(200, 174, 255)          /* the riff under the cursor: light lilac */
-#define C_BLOCK_NOTE RGB(50, 38, 86)
-#define C_BLOCK_NOTE_SEL RGB(62, 38, 118)
-#define C_BLOCK_SPLIT RGB(84, 66, 136)          /* where a repeat begins */
+#define C_BLOCK RGB(44, 160, 60)                /* a riff: green */
+#define C_BLOCK_SEL RGB(96, 236, 196)           /* the riff under the cursor: mint */
+#define C_BLOCK_NOTE RGB(12, 64, 22)
+#define C_BLOCK_NOTE_SEL RGB(10, 86, 70)
+#define C_BLOCK_SPLIT RGB(24, 104, 36)          /* where a repeat begins */
 #define NOTES_MIN_W 24                          /* a riff narrower than this (its whole length, in px) shows no notes */
-#define C_BLOCK_SPLIT_SEL RGB(132, 104, 208)
+#define C_BLOCK_SPLIT_SEL RGB(40, 170, 140)
 
 /* a solid block with its corners rounded (1 px off each); open_l / open_r: it goes on past the view's edge there */
 static uint16_t blk_bg = C_PANEL;               /* what a block's corners show through to */
@@ -738,7 +739,7 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
     cv_rect(GX - 1, 6, 1, LANE_H - 12, sel ? C_LOW : C_GRID_4);
     card(7, 6, 17, 16, sel ? C_ACC : C_LOW, pc);
     lab[0] = (char)('1' + t); lab[1] = 0;
-    cv_text_on(7 + (17 - text_w(&FONT_S, lab)) / 2, 6, &FONT_S, lab, sel ? C_PANEL : C_TXT, sel ? C_ACC : C_LOW);
+    cv_text_on(7 + (17 - text_w(&FONT_S, lab)) / 2, 6, &FONT_S, lab, C_ON_ACC, sel ? C_ACC : C_LOW);
     copy_str(kind, t == SONG_DRUM_TRACK ? "DRUM" : sound_name(t), 4);   /* what the track is: its sound, short */
     if (kind[3] == ' ') kind[3] = 0;
     cv_text_on(6, 25, &FONT_S, kind, tr->flags & SONG_MUTE ? C_LOW : sel ? C_TXT : C_MID, pc);
@@ -908,7 +909,7 @@ static void draw_prj_row(uint32_t slot)
     cv_begin(240, PRJ_ROW_H, C_BG);
     card(4, 1, 232, PRJ_ROW_H - 2, bg, C_BG);
     card(8, 3, 16, 16, cur ? C_ACC : sel ? C_LOW : C_BG, bg);   /* the slot's chip: lit for the open project */
-    cv_text_on(8 + (16 - text_w(&FONT_S, lab)) / 2, 2, &FONT_S, lab, cur ? C_PANEL : C_MID, cur ? C_ACC : sel ? C_LOW : C_BG);
+    cv_text_on(8 + (16 - text_w(&FONT_S, lab)) / 2, 2, &FONT_S, lab, cur ? C_ON_ACC : C_MID, cur ? C_ACC : sel ? C_LOW : C_BG);
     if (!prj.used[slot]) {
         cv_text_on(32, 2, &FONT_S, slot == PRJ_AUTO ? "NO AUTOSAVE" : "EMPTY", sel ? C_MID : C_LOW, bg);
     } else {
@@ -1154,14 +1155,14 @@ static void note_name(char *s, uint32_t n)      /* "C#3" (C4 = 60) */
     if (n >= 12u) { s[k++] = (char)('0' + n / 12u - 1u); s[k] = 0; }
 }
 static int black_key(uint32_t n) { return (0x54Au >> (n % 12u)) & 1u; }
-#define C_KEY_WHITE RGB(118, 106, 152)          /* toned down, a little violet: no glare */
-#define C_KEY_BLACK RGB(30, 24, 46)
-#define C_KEY_INK RGB(30, 22, 50)               /* labels on a white or lit key */
-#define C_KEY_LIT_ROW RGB(66, 50, 104)
+#define C_KEY_WHITE RGB(150, 160, 190)          /* toned down: no glare */
+#define C_KEY_BLACK RGB(14, 18, 56)
+#define C_KEY_INK RGB(10, 14, 48)               /* labels on a white or lit key */
+#define C_KEY_LIT_ROW RGB(28, 64, 150)
 static uint16_t rif_row_bg(uint32_t n)          /* a note row's ground: a card's, a shade darker for the black keys */
 {
-    if (rif.trk == SONG_DRUM_TRACK) return n & 1u ? RGB(34, 27, 52) : C_PANEL;
-    return black_key(n) ? RGB(32, 25, 48) : C_PANEL;
+    if (rif.trk == SONG_DRUM_TRACK) return n & 1u ? RGB(12, 18, 66) : C_PANEL;
+    return black_key(n) ? RGB(11, 16, 60) : C_PANEL;
 }
 static int key_down(uint32_t n)                 /* a key (or MIDI note on the track) plays note n now */
 {
@@ -1243,11 +1244,11 @@ static void draw_rif_rows(uint32_t r0, uint32_t nr, uint32_t pos)   /* rows r0 .
     for (s = 0; s <= RIF_STEPS; s++) {
         uint32_t st = rif.left + s;
         int32_t x = RIF_KW + (int32_t)(s * (uint32_t)RIF_SW);
-        if (st % 16u == 0u) cv_rect(x, 0, 1, (int32_t)(nr * RIF_RH), RGB(92, 76, 136));
+        if (st % 16u == 0u) cv_rect(x, 0, 1, (int32_t)(nr * RIF_RH), RGB(70, 130, 255));
         else if (st % 4u == 0u) { if (RIF_SW >= 3) cv_rect(x, 0, 1, (int32_t)(nr * RIF_RH), C_GRID_4); }
         else if (RIF_SW >= 6) cv_rect(x, 0, 1, (int32_t)(nr * RIF_RH), C_GRID_BAR);
         if (s < RIF_STEPS && st >= f->steps) cv_rect(x + (RIF_SW > 3 ? 1 : 0), 0, RIF_SW > 3 ? RIF_SW - 1 : RIF_SW,
-                                                    (int32_t)(nr * RIF_RH), RGB(28, 22, 42));
+                                                    (int32_t)(nr * RIF_RH), RGB(6, 9, 34));
     }
     /* the notes */
     for (i = f->first; i < (uint32_t)f->first + f->count; i++) {
@@ -1370,7 +1371,7 @@ static void draw_edt(void)
         int32_t x = 6 + (int32_t)tb * 78, w = 72, on = tb == edt.tab, off = tb == TAB_NOTE && !has_note;
         card(x, 3, w, 19, on ? C_ACC : C_PANEL, C_BG);
         cv_text_on(x + (w - text_w(&FONT_S, EDT_TAB[tb])) / 2, 4, &FONT_S, EDT_TAB[tb],
-                   on ? C_PANEL : off ? C_LOW : C_MID, on ? C_ACC : C_PANEL);
+                   on ? C_ON_ACC : off ? C_LOW : C_MID, on ? C_ACC : C_PANEL);
     }
     cv_blit(0, 20);
     lcd_fill(0, 44, 240, FOOT_Y - 44, C_BG);
