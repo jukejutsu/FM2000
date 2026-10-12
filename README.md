@@ -25,7 +25,8 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 - The song model: tracks, riffs, notes, the arrangement, packing a song for the flash (tested: `tests/test_song.c`)
 - The ARR (arrangement) screen: cursor, scrolling, zoom, moving riffs along the timeline, the playhead
 - New riffs (SEQ on an empty bar), deleting riffs (SEQ held), the RIF piano roll to write and edit a riff's notes
-- Playback from the cursor, a loop of 1 to 32 bars, a metronome
+- Playback from the cursor, as in Music 2000: the playhead runs a bar in, then the page slides under it (ARR and RIF);
+  a loop of 1 to 32 bars, a metronome
 - Repeating a riff: a riff and its repeats drawn as one block, a line where each repeat begins
 - A simple synth: one engine (BASIC, 7 presets) for tracks 1-3, three drum kits for track 4
 - Projects: 8 slots and an autosave in the flash, save / save as / load / new / clear, back where you were at power-on

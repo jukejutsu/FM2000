@@ -397,6 +397,8 @@ static const char *const ZOOM_NAME[4] = {"ZOOM 2X", "ZOOM 1X", "ZOOM 0.5X", "ZOO
 #define BW ((int32_t)ZOOM_BW[ui.zoom])
 #define COLS (4u << ui.zoom)
 #define ZOOM_1X 1u
+/* where the view starts, in steps: a bar's start when still; while playing, wherever the playhead has slid it */
+#define VIEW (ui.scrolling ? ui.vstep : ui.left * STEPS_PER_BAR)
 
 static struct {
     uint32_t bar, trk, left, oct;               /* the cursor, the first bar shown, the keys' octave (0..4) */
@@ -405,6 +407,7 @@ static struct {
     uint32_t drawn_pos;                         /* the playhead drawn (a step, or ~0) */
     uint32_t rec;                               /* REC armed (recording itself: not yet) */
     uint32_t zoom;                              /* 0 2x, 1 1x, 2 0.5x, 3 0.25x */
+    uint32_t scrolling, vstep;                  /* playing: the view follows the playhead from vstep (a step, not a bar) */
     uint32_t mode;                              /* M_ARR, M_PRJ, M_RIF */
     uint32_t msg_until;                         /* the footer shows ui.msg until then (fm1_ms) */
     char msg[24];
@@ -503,16 +506,19 @@ static void draw_head(const char *screen)
     cv_blit(0, 0);
 }
 
+static int32_t xstep(uint32_t step)             /* a step's x on ARR (left of GX: off the view, under the labels) */
+{
+    return GX + ((int32_t)step - (int32_t)VIEW) * BW / (int32_t)STEPS_PER_BAR;
+}
+
 static void draw_ruler(void)
 {
-    uint32_t c;
+    uint32_t bar, fb = VIEW / STEPS_PER_BAR, lb = (VIEW + COLS * STEPS_PER_BAR + STEPS_PER_BAR - 1u) / STEPS_PER_BAR;
     cv_begin(240, RULER_H, C_BLACK);
-    for (c = 0; c < COLS; c++) {
-        uint32_t bar = ui.left + c;
-        int32_t x = GX + (int32_t)c * BW;
+    for (bar = fb; bar < lb && bar < SONG_BARS; bar++) {
+        int32_t x = xstep(bar * STEPS_PER_BAR);
         char num[4];
         uint32_t len;
-        if (bar >= SONG_BARS) break;
         len = bar + 1u >= 100u ? 3u : bar + 1u >= 10u ? 2u : 1u;
         put_num(num, bar + 1u, len);
         num[len] = 0;
@@ -524,6 +530,7 @@ static void draw_ruler(void)
         if (song.loop_end > song.loop_start && bar >= song.loop_start && bar < song.loop_end)
             cv_rect(x, 0, BW, 2, C_ACC);        /* the loop: a line over its bars */
     }
+    cv_rect(0, 0, GX, RULER_H, C_BLACK);        /* (what slid off the left) */
     cv_blit(0, RULER_Y);
 }
 
@@ -614,45 +621,37 @@ static void draw_notes(uint32_t t, const song_riff_t *f, uint32_t off, int32_t x
 
 static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and its riffs; pos = the playhead step */
 {
-    uint32_t c, sel = t == ui.trk;
+    uint32_t bar, sel = t == ui.trk;
+    uint32_t fb = VIEW / STEPS_PER_BAR, lb = (VIEW + COLS * STEPS_PER_BAR + STEPS_PER_BAR - 1u) / STEPS_PER_BAR;
     const song_track_t *tr = &song.track[t];
     char lab[8], kind[5];
+    if (lb > SONG_BARS) lb = SONG_BARS;
     cv_begin(240, LANE_H, C_BLACK);
-    /* the label: the number, the kind, a mark when muted */
-    cv_rect(0, 1, GX - 3, LANE_H - 2, sel ? C_LOW : C_BG);
-    lab[0] = (char)('1' + t); lab[1] = 0;
-    cv_text_on(5, 4, &FONT_S, lab, sel ? C_ACC : C_MID, sel ? C_LOW : C_BG);
-    copy_str(kind, t == SONG_DRUM_TRACK ? "DRUM" : sound_name(t), 4);   /* what the track is: its sound, short */
-    if (kind[3] == ' ') kind[3] = 0;
-    cv_text_on(4, 24, &FONT_S, kind, tr->flags & SONG_MUTE ? C_MID : sel ? C_WHITE : C_TXT, sel ? C_LOW : C_BG);
     /* the grid under it all: a faint line on every bar, a less faint one every 4 bars, one under the track
      * (zoomed out to 0.25x, only the 4-bar lines: a line every 6 px would be a grey wash) */
-    for (c = 0; c <= COLS; c++) {
-        uint32_t bar = ui.left + c;
+    for (bar = fb; bar <= lb; bar++) {
         if (bar % 4u && ui.zoom == 3u) continue;
-        cv_rect(GX + (int32_t)c * BW, 0, 1, LANE_H, bar % 4u ? C_GRID_BAR : C_GRID_4);
+        cv_rect(xstep(bar * STEPS_PER_BAR), 0, 1, LANE_H, bar % 4u ? C_GRID_BAR : C_GRID_4);
     }
     cv_rect(GX, LANE_H - 1, 240 - GX, 1, C_GRID_LANE);
     /* the riffs: a riff and its repeats are one block, a line where each repeat begins; the repeat under the cursor
      * lit; its notes drawn dark in it when the riff is at least NOTES_MIN_W px long on screen (a 4-bar riff still
      * shows them at 0.25x, a 1-bar one only from 1x) */
-    for (c = 0; c < COLS;) {
-        uint32_t bar = ui.left + c, b0 = 0, r, end, vis;
-        if (bar >= SONG_BARS) break;
+    for (bar = fb; bar < lb;) {
+        uint32_t b0 = 0, r, end;
         r = song_at(&song, bar, t, &b0);
-        if (!r) { c++; continue; }
+        if (!r) { bar++; continue; }
         {
             const song_riff_t *f = &song.riff[t][r - 1u];
-            uint32_t first, last, view_end = ui.left + COLS, len = riff_bars(f), open_r, a, hb = ~0u;
+            uint32_t first, last, len = riff_bars(f), open_r, a, hb = ~0u;
             int32_t y = 3, h = LANE_H - 7;
             song_chain(&song, t, b0, &first, &last, &end);
-            if (end > view_end) end = view_end;
-            vis = end - bar;                    /* bars of it in view from here */
-            open_r = song_block_end(&song, t, last) > view_end;   /* it goes on past the view */
+            if (end > lb) end = lb;
+            open_r = song_block_end(&song, t, last) > lb;   /* it goes on past the view */
             if (sel && ui.bar >= first && ui.bar < end) song_at(&song, ui.bar, t, &hb);   /* the lit repeat */
             for (a = first; a <= last; a += len) {          /* each repeat: its block, its line, its notes */
                 uint32_t s0 = a > bar ? a : bar, s1 = a + len < end ? a + len : end, lit = a == hb;
-                int32_t xa = GX + (int32_t)(s0 - ui.left) * BW, wa = (int32_t)((s1 - s0) * BW);
+                int32_t xa = xstep(s0 * STEPS_PER_BAR), wa = xstep(s1 * STEPS_PER_BAR) - xa;
                 if (s1 <= s0) continue;
                 riff_block(xa + (s0 == first ? 1 : 0), y, wa - (s0 == first ? 1 : 0) - (s1 == end && !open_r ? 1 : 0), h,
                            s0 != first, s1 != end || open_r, lit ? C_BLOCK_SEL : C_BLOCK);
@@ -660,18 +659,25 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
                 if ((int32_t)len * BW >= NOTES_MIN_W)   /* notes when the riff is wide enough on screen to read them */
                     draw_notes(t, f, (s0 - a) * STEPS_PER_BAR, xa + 1, s1 - s0, wa - 3, lit ? C_BLOCK_NOTE_SEL : C_BLOCK_NOTE);
             }
-            c += vis;
+            bar = end;
         }
     }
     /* the cursor: a frame round the bar */
-    if (sel && ui.bar >= ui.left && ui.bar < ui.left + COLS) {
-        int32_t x = GX + (int32_t)(ui.bar - ui.left) * BW;
+    if (sel) {
+        int32_t x = xstep(ui.bar * STEPS_PER_BAR);
         cv_rect(x, 0, BW, 1, C_TXT); cv_rect(x, LANE_H - 1, BW, 1, C_TXT);
         cv_rect(x, 0, 1, LANE_H, C_TXT); cv_rect(x + BW - 1, 0, 1, LANE_H, C_TXT);
     }
     /* the playhead: a line at its step */
-    if (pos != ~0u && pos >= ui.left * STEPS_PER_BAR && pos < (ui.left + COLS) * STEPS_PER_BAR)
-        cv_rect(GX + (int32_t)((pos - ui.left * STEPS_PER_BAR) * BW / STEPS_PER_BAR), 0, 2, LANE_H, C_PLAY);
+    if (pos != ~0u) cv_rect(xstep(pos), 0, 2, LANE_H, C_PLAY);
+    /* the label last, over whatever slid off the left: the number, the kind */
+    cv_rect(0, 0, GX, LANE_H, C_BLACK);
+    cv_rect(0, 1, GX - 3, LANE_H - 2, sel ? C_LOW : C_BG);
+    lab[0] = (char)('1' + t); lab[1] = 0;
+    cv_text_on(5, 4, &FONT_S, lab, sel ? C_ACC : C_MID, sel ? C_LOW : C_BG);
+    copy_str(kind, t == SONG_DRUM_TRACK ? "DRUM" : sound_name(t), 4);   /* what the track is: its sound, short */
+    if (kind[3] == ' ') kind[3] = 0;
+    cv_text_on(4, 24, &FONT_S, kind, tr->flags & SONG_MUTE ? C_MID : sel ? C_WHITE : C_TXT, sel ? C_LOW : C_BG);
     cv_blit(0, LANE_Y + t * LANE_H);
 }
 
@@ -1612,18 +1618,35 @@ static void app_step(void)
     for (k = 0; k < 27u; k++) fm1_led_key(KEY_LED(k), keys >> k & 1u);
 
     /* the playhead: redraw the lanes when it moves a step; page along when it leaves the view */
+    /* playing, as in Music 2000: the playhead runs a bar into the view, then holds there and the page slides
+     * under it (a step at a time); a jump (the loop, the song's end) moves the page to where it went */
     pos = seq_play ? seq_step : ~0u;
-    if (ui.mode == M_RIF) {                     /* RIF: the playhead within the opened riff */
+    if (seq_play) {
+        uint32_t span = COLS * STEPS_PER_BAR, v;
+        if (!ui.scrolling) { ui.scrolling = 1; ui.vstep = seq_from * STEPS_PER_BAR; }   /* the page from where it starts */
+        v = ui.vstep;
+        if (pos < v || pos >= v + span) v = pos / STEPS_PER_BAR * STEPS_PER_BAR;
+        else if (pos > v + STEPS_PER_BAR) v = pos - STEPS_PER_BAR;
+        if (v > SONG_BARS * STEPS_PER_BAR - span) v = SONG_BARS * STEPS_PER_BAR - span;
+        if (v != ui.vstep) { ui.vstep = v; ui.dirty |= D_RULER | D_LANES; }
+    } else if (ui.scrolling) {                  /* stopped: the page stays, on a bar */
+        ui.left = ui.vstep / STEPS_PER_BAR;
+        ui.scrolling = 0;
+        ui.dirty |= D_RULER | D_LANES;
+    }
+    if (ui.mode == M_RIF) {                     /* RIF: the same, within the opened riff */
         uint32_t rp = rif_pos();
+        if (rp != ~0u) {
+            const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
+            uint32_t thr = RIF_STEPS / 2u < STEPS_PER_BAR ? RIF_STEPS / 2u : STEPS_PER_BAR, l = rif.left;
+            uint32_t maxl = f->steps > RIF_STEPS ? f->steps - RIF_STEPS : 0u;
+            if (rp < l || rp >= l + RIF_STEPS) l = rp / RIF_STEPS * RIF_STEPS;
+            else if (rp > l + thr) l = rp - thr;
+            if (l > maxl) l = maxl;
+            rif.left = l;
+        }
         if (rp != ui.drawn_pos) { ui.drawn_pos = rp; ui.dirty |= D_LANES; }
     } else if (pos != ui.drawn_pos) {
-        if (pos != ~0u) {
-            uint32_t bar = pos / STEPS_PER_BAR;
-            if (bar < ui.left || bar >= ui.left + COLS) {
-                ui.left = bar > SONG_BARS - COLS ? SONG_BARS - COLS : bar;
-                ui.dirty |= D_RULER;
-            }
-        }
         ui.drawn_pos = pos;
         ui.dirty |= D_LANES;
     }
