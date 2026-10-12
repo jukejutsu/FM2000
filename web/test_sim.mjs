@@ -41,7 +41,7 @@ ex.web_enc(ENC.SELECT, 8); ex.web_enc(ENC.ALGORITHM, 2); run(1000);
 shot("1-cursor");
 ex.web_enc(ENC.SELECT, -8); ex.web_enc(ENC.ALGORITHM, -2); run(1100);
 tap(BTN.PLAY);
-run(1100 + 9000);                             // ~4.5 bars at 118 BPM
+run(1100 + 9000);                             // ~5 bars at 140 BPM
 const lit1 = shot("2-playing");
 tap(BTN.PLAY);
 run(ms + 500);

@@ -333,46 +333,50 @@ static void notes(uint32_t t, uint32_t r, uint32_t steps, const char *name, cons
 }
 #define NOTES(t, r, steps, name, ...) do { static const uint8_t E[] = {__VA_ARGS__}; notes(t, r, steps, name, E, sizeof E); } while (0)
 
-static void test_song(void)
+static void test_song(void)                     /* a chiptune at 140: Am F C G, an arpeggio, an octave bass, a lead */
 {
     static const uint8_t PLACE[][3] = {         /* bar, track, riff */
         {0, 2, 1}, {0, 3, 3}, {1, 3, 3}, {2, 3, 3}, {3, 3, 2},
         {4, 2, 1}, {4, 1, 1}, {4, 3, 1}, {5, 3, 1}, {6, 3, 1}, {7, 3, 2},
-        {8, 2, 1}, {8, 1, 1}, {8, 0, 1}, {8, 3, 1}, {9, 3, 1}, {10, 3, 1}, {10, 0, 2}, {11, 3, 2},
-        {12, 2, 1}, {12, 1, 2}, {12, 0, 1}, {12, 3, 1}, {13, 3, 1}, {14, 3, 1}, {14, 0, 3}, {15, 3, 2},
+        {8, 2, 1}, {8, 1, 1}, {8, 0, 1}, {8, 3, 1}, {9, 3, 1}, {10, 3, 1}, {11, 3, 2},
+        {12, 2, 1}, {12, 1, 1}, {12, 0, 2}, {12, 3, 1}, {13, 3, 1}, {14, 3, 1}, {15, 3, 2},
     };
-    static const uint8_t BUSY[4] = {52, 48, 55, 50};
-    uint32_t i;
+    static const uint8_t ROOT[4] = {45, 41, 48, 43};                 /* A F C G */
+    static const uint8_t CHORD[4][4] = {{69, 72, 76, 81}, {65, 69, 72, 77}, {64, 67, 72, 76}, {67, 71, 74, 79}};
+    uint32_t i, b;
     song_init(&song);
     song.name[0] = 'D'; song.name[1] = 'E'; song.name[2] = 'M'; song.name[3] = 'O';
-    song.bpm10 = 1180;
-    song.track[0].inst = 0;                     /* LEAD SQ */
-    song.track[1].inst = 2;                     /* BASS SAW */
-    song.track[2].inst = 4;                     /* PAD TRI */
-    song.track[3].inst = 0;                     /* KIT 808 */
-    song.track[0].pan = 80; song.track[2].pan = 48; song.track[2].vol = 80; song.track[3].vol = 120;
-    NOTES(0, 1, 32, "HOOK", 0, 3, 76, 110, 4, 2, 74, 90, 6, 2, 72, 100, 8, 6, 69, 110, 16, 3, 72, 100, 20, 2, 74, 90,
-          22, 2, 76, 100, 24, 8, 77, 110);
-    NOTES(0, 2, 32, "ANSWR", 0, 3, 79, 110, 4, 2, 77, 90, 6, 2, 76, 100, 8, 4, 72, 100, 12, 4, 74, 90, 16, 6, 74, 110,
-          24, 2, 71, 90, 26, 6, 67, 100);
-    NOTES(0, 3, 32, "END", 0, 4, 76, 110, 4, 4, 74, 100, 8, 4, 71, 100, 12, 4, 74, 90, 16, 16, 69, 120);
-    NOTES(1, 1, 64, "ROOTS", 0, 2, 45, 120, 2, 2, 45, 80, 4, 2, 57, 100, 6, 2, 45, 80, 8, 2, 45, 120, 10, 2, 45, 80,
-          12, 2, 57, 100, 14, 2, 45, 80, 16, 2, 41, 120, 18, 2, 41, 80, 20, 2, 53, 100, 22, 2, 41, 80, 24, 2, 41, 120,
-          26, 2, 41, 80, 28, 2, 53, 100, 30, 2, 41, 80, 32, 2, 48, 120, 34, 2, 48, 80, 36, 2, 60, 100, 38, 2, 48, 80,
-          40, 2, 48, 120, 42, 2, 48, 80, 44, 2, 60, 100, 46, 2, 48, 80, 48, 2, 43, 120, 50, 2, 43, 80, 52, 2, 55, 100,
-          54, 2, 43, 80, 56, 2, 43, 120, 58, 2, 43, 80, 60, 2, 55, 100, 62, 2, 47, 90);
-    riff_copy(&song, 1, 1, 2);
-    for (i = 0; i < 4u; i++) riff_note_set(&song, 1, 2, i * 16u + 15u, 1, BUSY[i], 110);
-    song.riff[1][1].name[0] = 'B'; song.riff[1][1].name[1] = 'U'; song.riff[1][1].name[2] = 'S';
-    song.riff[1][1].name[3] = 'Y'; song.riff[1][1].name[4] = 0;
-    NOTES(2, 1, 64, "AMFCG", 0, 15, 57, 90, 0, 15, 60, 90, 0, 15, 64, 90, 16, 15, 57, 90, 16, 15, 60, 90,
-          16, 15, 65, 90, 32, 15, 55, 90, 32, 15, 60, 90, 32, 15, 64, 90, 48, 15, 55, 90, 48, 15, 59, 90, 48, 15, 62, 90);
-    NOTES(3, 1, 16, "BEAT", 0, 1, 36, 127, 2, 1, 42, 70, 4, 1, 38, 120, 6, 1, 42, 70, 8, 1, 36, 110, 10, 1, 36, 90,
-          10, 1, 42, 70, 12, 1, 38, 120, 12, 1, 39, 80, 14, 1, 42, 70, 15, 1, 46, 80);
-    NOTES(3, 2, 16, "FILL", 0, 1, 36, 127, 4, 1, 38, 110, 8, 1, 36, 110, 10, 1, 38, 90, 11, 1, 38, 100, 12, 1, 45, 110,
-          13, 1, 43, 110, 14, 1, 41, 120, 15, 1, 38, 127);
-    NOTES(3, 3, 16, "HATS", 0, 1, 42, 90, 2, 1, 42, 60, 4, 1, 42, 90, 6, 1, 42, 60, 8, 1, 42, 90, 10, 1, 42, 60,
-          12, 1, 42, 90, 14, 1, 46, 70);
+    song.bpm10 = 1400;
+    song.track[0].inst = 1;                     /* PULSE */
+    song.track[1].inst = 5;                     /* PLUCK */
+    song.track[2].inst = 6;                     /* CHIP */
+    song.track[3].inst = 1;                     /* KIT TIGHT */
+    song.track[0].pan = 76; song.track[2].pan = 44; song.track[2].vol = 70; song.track[1].vol = 120;
+    song.track[3].vol = 115;
+    NOTES(0, 1, 64, "HOOK", 0, 3, 81, 115, 3, 3, 79, 100, 6, 2, 76, 105, 8, 2, 72, 95, 10, 4, 76, 110, 14, 2, 74, 95,
+          16, 3, 72, 110, 19, 3, 69, 100, 22, 2, 72, 105, 24, 6, 77, 115, 30, 2, 76, 95,
+          32, 3, 76, 110, 35, 3, 74, 100, 38, 2, 72, 105, 40, 2, 67, 95, 42, 4, 72, 110, 46, 2, 74, 95,
+          48, 3, 71, 110, 51, 3, 74, 100, 54, 4, 79, 115, 58, 2, 76, 95, 60, 4, 74, 105);
+    NOTES(0, 2, 64, "HIGH", 0, 2, 84, 115, 2, 2, 83, 95, 4, 4, 81, 110, 8, 2, 76, 95, 10, 2, 81, 100, 12, 4, 84, 115,
+          16, 2, 84, 110, 18, 2, 81, 95, 20, 4, 77, 105, 24, 2, 81, 100, 26, 2, 77, 95, 28, 4, 72, 105,
+          32, 2, 79, 110, 34, 2, 76, 95, 36, 4, 72, 105, 40, 2, 76, 100, 42, 2, 79, 100, 44, 4, 84, 115,
+          48, 4, 83, 115, 52, 4, 79, 105, 56, 4, 74, 100, 60, 4, 71, 95);
+    notes(1, 1, 64, "OCTS", 0, 0);              /* the bass: eighths, jumping the octave */
+    for (b = 0; b < 4u; b++)
+        for (i = 0; i < 8u; i++)
+            riff_note_set(&song, 1, 1, b * 16u + i * 2u, 2, (uint8_t)(ROOT[b] + (i & 1u ? 12u : 0u)), i & 1u ? 90 : 125);
+    notes(2, 1, 64, "ARP", 0, 0);               /* sixteenths up the chord, accent on the beat */
+    for (b = 0; b < 4u; b++)
+        for (i = 0; i < 16u; i++)
+            riff_note_set(&song, 2, 1, b * 16u + i, 1, CHORD[b][i & 3u], i & 3u ? 70 : 105);
+    NOTES(3, 1, 16, "BEAT", 0, 1, 36, 127, 0, 1, 42, 80, 1, 1, 42, 40, 2, 1, 42, 80, 3, 1, 42, 40, 4, 1, 38, 120,
+          4, 1, 42, 80, 5, 1, 42, 40, 6, 1, 42, 80, 7, 1, 36, 105, 7, 1, 42, 40, 8, 1, 36, 120, 8, 1, 42, 80,
+          9, 1, 42, 40, 10, 1, 46, 80, 11, 1, 42, 40, 12, 1, 38, 120, 12, 1, 42, 80, 13, 1, 42, 40, 14, 1, 42, 80,
+          15, 1, 42, 50);
+    NOTES(3, 2, 16, "FILL", 0, 1, 36, 127, 2, 1, 42, 80, 4, 1, 38, 110, 6, 1, 36, 110, 8, 1, 38, 90, 10, 1, 38, 100,
+          12, 1, 45, 110, 13, 1, 43, 110, 14, 1, 41, 120, 15, 1, 38, 127);
+    NOTES(3, 3, 16, "HATS", 0, 1, 36, 120, 2, 1, 42, 80, 4, 1, 42, 60, 6, 1, 42, 80, 8, 1, 36, 110, 10, 1, 42, 80,
+          12, 1, 42, 60, 14, 1, 46, 70);
     for (i = 0; i < sizeof PLACE / sizeof PLACE[0]; i++)
         song_place(&song, PLACE[i][0], PLACE[i][1], PLACE[i][2]);
 }
@@ -921,16 +925,21 @@ static const char *const ICON_TRASH[16] = {     /* a bin, 16 x 16 */
 /* a box in the middle of the screen: an icon, a title, a line under it (the countdown, the slot) */
 static struct { uint32_t on, until; } splash;
 static const char *const *splash_icon = ICON_DISK;
-static void draw_splash(const char *title, const char *sub, uint16_t ink)
+static void draw_splash(const char *title, const char *sub, uint16_t ink)   /* a grey metal plate, the icon lit in a dark well */
 {
     int32_t i, j;
     cv_begin(184, 64, C_BG);
-    card(0, 0, 184, 64, C_PANEL_HI, C_BG);
+    card(0, 0, 184, 64, C_CHROME, C_BG);
+    cv_rect(4, 0, 176, 1, C_CHROME_HI); cv_rect(0, 4, 1, 56, C_CHROME_HI);   /* lit from the top left */
+    cv_rect(4, 63, 176, 1, C_CHROME_LO); cv_rect(183, 4, 1, 56, C_CHROME_LO);
+    cv_rect(4, 1, 176, 1, mix565(C_CHROME, C_CHROME_HI, 8));
+    card(10, 10, 44, 44, C_BG, C_CHROME);       /* the well */
+    cv_rect(14, 53, 36, 1, C_CHROME_HI);
     for (j = 0; j < 16; j++)
         for (i = 0; i < 16; i++)
             if (splash_icon[j][i] == '#') cv_rect(16 + i * 2, 16 + j * 2, 2, 2, ink);
-    cv_text_on(64, 12, &FONT_M, title, C_TXT, C_PANEL_HI);
-    if (sub && *sub) cv_text_on(64, 34, &FONT_S, sub, ink, C_PANEL_HI);
+    cv_text_on(64, 12, &FONT_M, title, C_CHROME_INK, C_CHROME);
+    if (sub && *sub) cv_text_on(64, 34, &FONT_S, sub, C_TXT, C_CHROME);
     cv_blit(28, 88);
     splash.on = 1;
     splash_icon = ICON_DISK;                    /* (the disk unless the next caller says otherwise) */
