@@ -11,7 +11,7 @@
  *                it runs into, both whole (placing riffs moves to another control, later)
  *   KNOB 2       repeats of the riff under the cursor: clockwise one more right after it (when the whole riff
  *                fits), anticlockwise one less; a riff and its repeats are one block, a line where each begins
- *   KNOB 3       the loop: anticlockwise on (4 bars from the cursor) and longer, clockwise shorter down to off
+ *   KNOB 3       the loop: clockwise on (4 bars from the cursor) and longer, anticlockwise shorter down to off
  *   KNOB 4       zoom 2x / 1x / 0.5x / 0.25x (4 / 8 / 16 / 32 bars in view): anticlockwise out (round the cursor),
  *                clockwise in (from the cursor's bar)
  *   PLAY         play the song from the cursor's bar / stop; REC arms (recording: not yet)
@@ -1559,10 +1559,10 @@ static void app_step(void)
                 ui.dirty |= D_LANES | D_FOOT;
             }
         }
-        if ((d = enc(ENC_KNOB3)) != 0) {           /* the loop: anticlockwise on (4 bars) and longer, clockwise shorter, off */
+        if ((d = enc(ENC_KNOB3)) != 0) {           /* the loop: clockwise on (4 bars) and longer, anticlockwise shorter, off */
             uint32_t on = song.loop_end > song.loop_start, len = on ? song.loop_end - song.loop_start : 0u, start = on ? song.loop_start : ui.bar;
-            for (; d < 0; d++) len = len ? (len < 32u ? len + 1u : 32u) : 4u;
-            for (; d > 0; d--) if (len) len--;
+            for (; d > 0; d--) len = len ? (len < 32u ? len + 1u : 32u) : 4u;
+            for (; d < 0; d++) if (len) len--;
             loop_set(start, len);
             edited();
             say_loop();

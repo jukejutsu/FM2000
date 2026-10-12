@@ -52,7 +52,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 | PRESETS | the track's sound, or the drum kit on track 4 | Shift ↑ ↓ |
 | KNOB 1 | move the riff under the cursor a bar left / right; it trades places with a neighbour it runs into, both kept whole | Shift ← → |
 | KNOB 2 | repeats of the riff under the cursor: clockwise one more right after it (if it fits), anticlockwise one less | P, Shift P |
-| KNOB 3 | the loop: anticlockwise on (4 bars from the cursor) and longer, clockwise shorter down to off | A, G |
+| KNOB 3 | the loop: clockwise on (4 bars from the cursor) and longer, anticlockwise shorter down to off | G, A |
 | KNOB 4 | zoom 2x / 1x / 0.5x / 0.25x (4 to 32 bars): anticlockwise out, clockwise in from the cursor | K, Shift K |
 | PLAY | play from the cursor / stop | Space |
 | GLO | the metronome (for now) | 6 |
