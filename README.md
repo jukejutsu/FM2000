@@ -24,7 +24,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 
 - The song model: tracks, riffs, notes, the arrangement, packing a song for the flash (tested: `tests/test_song.c`)
 - The ARR (arrangement) screen: cursor, scrolling, zoom, moving riffs along the timeline, the playhead
-- New riffs (SEQ on an empty bar), deleting riffs (SEQ held), the RIF piano roll to write and edit a riff's notes
+- New riffs (SEQ on an empty bar), deleting riffs (SEQ on a riff), the RIF piano roll (EDIT on a riff) to write and edit a riff's notes
 - Playback from the cursor, as in Music 2000: the playhead crosses the first bar of the page, then the page slides on
   a bar and the playhead starts again from the left (ARR and RIF);
   a loop of 1 to 32 bars, a metronome
@@ -57,12 +57,13 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for w
 | PLAY | play from the cursor / stop | Space |
 | GLO | the metronome (for now) | 6 |
 | SAVE | tap: the PRJ screen (projects); hold 2 s: save | 8 |
-| SEQ | on an empty bar: a new riff (16 steps); on a riff: RIF, its piano roll; held 2 s on a riff: delete it | 0 |
+| SEQ | on an empty bar: a new riff (16 steps); on a riff: delete it | 0 |
+| EDIT | on a riff: RIF, its piano roll | 5 |
 | keys | play the track's sound; OCT− OCT+ the octave | Z…/ and Q…O rows, [ ] |
 
 ## A riff (RIF screen)
 
-SEQ on a riff opens its piano roll; HOME or SEQ goes back. Time across, pitch up the screen beside a piano keyboard
+EDIT on a riff opens its piano roll; HOME goes back. Time across, pitch up the screen beside a piano keyboard
 (the keys light up as you play them); on the drum track the rows are named by their drums.
 
 | Control | Does | In the simulator |

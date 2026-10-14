@@ -16,8 +16,8 @@
  *                clockwise in (from the cursor's bar)
  *   PLAY         play the song from the cursor's bar / stop; REC arms (recording: not yet)
  *   SAVE         tap: PRJ, the projects (HOME back); hold 2 s: save (see PRJ below)
- *   SEQ          on an empty bar: a new riff (16 steps); on a riff: RIF, its piano roll (HOME or SEQ back);
- *                held 2 s on a riff: the riff deleted
+ *   SEQ          on an empty bar: a new riff (16 steps); on a riff: the riff deleted
+ *   EDIT         on a riff: RIF, its piano roll (HOME back)
  *   GLO          the metronome on / off (for now)
  *   keys         play the track's sound; OCT- OCT+ the octave
  *
@@ -1191,7 +1191,7 @@ static void prj_input(int32_t d, uint32_t b)
 }
 
 /* ================================================================== RIF: a riff's piano roll */
-/* SEQ on a riff in ARR opens it here; HOME (or SEQ) goes back. Time across, pitch up the screen (20 notes in view);
+/* EDIT on a riff in ARR opens it here; HOME goes back. Time across, pitch up the screen (20 notes in view);
  * the cursor is a step and a note. The drum track's rows are named by their drums.
  *   SELECT / ALGORITHM   the cursor: the step / the note (as on ARR)
  *   OCT+                 a note in at the cursor (1 step); on a note: the note out
@@ -1656,8 +1656,7 @@ static void edt_input(int32_t dsel, int32_t dalg, int32_t dk1)
     }
 }
 
-/* ARR's SEQ: on an empty bar a new riff (16 steps); on a riff, tapped: RIF; held 2 s: the riff deleted */
-#define DEL_HOLD_MS 2000u
+/* ARR's SEQ: on an empty bar a new riff (16 steps); on a riff: the riff deleted. (EDIT on a riff opens RIF.) */
 static void new_riff_here(void)
 {
     uint32_t r = riff_free(&song, ui.trk);
@@ -1679,45 +1678,13 @@ static void delete_riff_here(void)              /* the copy under the cursor; th
     seq_bars = song_bars(&song);
     edited();
 }
-static struct { uint32_t t0, state, shown, riff; } hold_seq;   /* state 0 up, 1 down, 2 counting, 3 done */
-static void seq_button(uint32_t b, uint32_t rel)
+static void seq_button(uint32_t b)
 {
-    uint32_t el = fm1_ms - hold_seq.t0;
-    if (b & (1u << BTN_SEQ)) {
-        if (ui.mode == M_RIF) { ui.mode = M_ARR; ui.dirty = D_ALL; hold_seq.state = 3; return; }   /* back */
-        if (ui.mode != M_ARR) return;
-        hold_seq.t0 = fm1_ms; hold_seq.shown = ~0u; el = 0;
-        hold_seq.riff = song_at(&song, ui.bar, ui.trk, 0);
-        if (!hold_seq.riff) { new_riff_here(); hold_seq.state = 3; }   /* an empty bar: a new riff, at once */
-        else hold_seq.state = 1;
-    }
-    if (hold_seq.state == 1 && el >= SAVE_TAP_MS) hold_seq.state = 2;
-    if (hold_seq.state == 2) {
-        if (el >= DEL_HOLD_MS) {
-            hold_seq.state = 3;
-            delete_riff_here();
-            splash_icon = ICON_TRASH;
-            splash_for("DELETED", "", RGB(255, 110, 100), 700);
-        } else {
-            uint32_t left = (DEL_HOLD_MS - el + 99u) / 100u;
-            if (left != hold_seq.shown) {
-                char s[8];
-                hold_seq.shown = left;
-                s[0] = (char)('0' + left / 10u); s[1] = '.'; s[2] = (char)('0' + left % 10u); s[3] = 0;
-                splash_icon = ICON_TRASH;
-                draw_splash("DELETE RIFF", s, RGB(255, 110, 100));
-                splash.until = 0;
-            }
-        }
-    }
-    if (rel & (1u << BTN_SEQ)) {
-        if (hold_seq.state == 1) {              /* a tap on a riff: open it */
-            uint32_t b0 = 0, r = song_at(&song, ui.bar, ui.trk, &b0);
-            if (r) rif_open(ui.trk, r, b0, (ui.bar - b0) * STEPS_PER_BAR);
-        }
-        if (hold_seq.state == 2) { splash.on = 0; ui.dirty = D_ALL; }   /* let go too soon: kept */
-        hold_seq.state = 0;
-    }
+    if (!(b & (1u << BTN_SEQ)) || ui.mode != M_ARR) return;
+    if (!song_at(&song, ui.bar, ui.trk, 0)) { new_riff_here(); return; }   /* an empty bar: a new riff */
+    delete_riff_here();                         /* on a riff: gone */
+    splash_icon = ICON_TRASH;
+    splash_for("DELETED", "", RGB(255, 110, 100), 700);
 }
 
 /* ================================================================== recording (REC on RIF) */
@@ -1881,7 +1848,7 @@ static void save_button(uint32_t b, uint32_t rel)
 /* the autosave: stopped, nothing touched for 10 s, and something changed since the last one */
 static void autosave(void)
 {
-    if (!prj.auto_due || seq_play || hold.state || hold_seq.state || (fm1_ms - prj.touched) < 10000u) return;
+    if (!prj.auto_due || seq_play || hold.state || (fm1_ms - prj.touched) < 10000u) return;
     prj.auto_due = 0;
     prj_save(PRJ_AUTO, &song, prj.cur, prj.unsaved ? PRJ_UNSAVED : 0);
     if (ui.mode == M_PRJ) { prj_refresh(); ui.dirty |= D_LANES; }
@@ -2070,9 +2037,13 @@ static void app_step(void)
     b = fm1_input_edges(&rel);
     if (b || rel) prj.touched = fm1_ms;
     save_button(b, rel);
-    seq_button(b, rel);
-    if (b & (1u << BTN_EDIT)) {                 /* EDIT: the opened riff's settings, and back */
-        if (ui.mode == M_RIF) {
+    seq_button(b);
+    if (b & (1u << BTN_EDIT)) {                 /* EDIT: on ARR a riff's piano roll; on RIF its settings, and back */
+        if (ui.mode == M_ARR) {
+            uint32_t b0 = 0, r = song_at(&song, ui.bar, ui.trk, &b0);
+            if (r) rif_open(ui.trk, r, b0, (ui.bar - b0) * STEPS_PER_BAR);
+            else say("NO RIFF HERE");
+        } else if (ui.mode == M_RIF) {
             ui.mode = M_EDT;
             edt.tab = rif_note_here() >= 0 ? TAB_NOTE : TAB_RIFF;   /* on a note: its settings first */
             edt.row = 0;
@@ -2170,8 +2141,7 @@ static void app_step(void)
                               : ui.mode == M_RIF ? undo.n != 0 : ui.oct < 2u);
     fm1_led_key(BTN_OCT_UP, ui.mode == M_PRJ ? 1 : ui.mode == M_RIF ? 1 : ui.oct > 2u);
     fm1_led_key(BTN_SAVE, ui.mode == M_PRJ);
-    fm1_led_key(BTN_SEQ, ui.mode == M_RIF);
-    fm1_led_key(BTN_EDIT, ui.mode == M_EDT);
+    fm1_led_key(BTN_EDIT, ui.mode == M_EDT || ui.mode == M_RIF);
     for (k = 0; k < 27u; k++) fm1_led_key(KEY_LED(k), keys >> k & 1u);
 
     /* the playhead: redraw the lanes when it moves a step; page along when it leaves the view */
