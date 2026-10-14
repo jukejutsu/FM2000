@@ -1194,7 +1194,8 @@ static void prj_input(int32_t d, uint32_t b)
 /* SEQ on a riff in ARR opens it here; HOME (or SEQ) goes back. Time across, pitch up the screen (20 notes in view);
  * the cursor is a step and a note. The drum track's rows are named by their drums.
  *   SELECT / ALGORITHM   the cursor: the step / the note (as on ARR)
- *   OCT+ / OCT-          a note in at the cursor (1 step) / the note under the cursor out
+ *   OCT+                 a note in at the cursor (1 step); on a note: the note out
+ *   OCT-                 undo (the riff's last change; recording: the last time round)
  *   KNOB 1 / 2 / 3       the note under the cursor: along the steps / up and down / its length
  *   KNOB 4               zoom, as on ARR: 8 / 16 / 32 / 64 steps in view
  *   REC                  record: the riff loops alone, the keys write onto its quantise grid (EDT); REC again:
@@ -1286,6 +1287,7 @@ static void rif_follow(void)                    /* the view keeps the cursor in 
     else if (rif.note + RIF_ROWS <= rif.top) rif.top = rif.note + RIF_ROWS - 1u;
 }
 
+static void undo_reset(void);
 static void rif_open(uint32_t trk, uint32_t r, uint32_t at, uint32_t step)
 {
     const song_riff_t *f = &song.riff[trk][r - 1u];
@@ -1303,8 +1305,61 @@ static void rif_open(uint32_t trk, uint32_t r, uint32_t at, uint32_t step)
     if (rif.top < RIF_ROWS - 1u) rif.top = RIF_ROWS - 1u;
     rif.left = rif.step / RIF_STEPS * RIF_STEPS;
     rif_follow();
+    undo_reset();                               /* (undo is this riff's) */
     ui.mode = M_RIF;
     ui.dirty = D_ALL;
+}
+
+/* undo (OCT- on RIF): the opened riff as it was before each change, newest last, UNDO_N deep. Turns of one knob in
+ * a row (less than a second apart) are one change; recording, everything put in on one time round is one. */
+#define UNDO_N 16u
+#define UNDO_NOTES 384u                         /* a riff with more notes than this: its changes cannot be undone */
+enum { U_NONE, U_ADD, U_DEL, U_MOVE, U_PITCH, U_LEN, U_STEPS, U_QUANT, U_VEL, U_REC };
+typedef struct { uint16_t count; uint8_t steps, quant; song_ev_t ev[UNDO_NOTES]; } undo_t;
+static undo_t undo_buf[UNDO_N] __attribute__((section(".pool")));
+static struct { uint32_t n, top, kind, at, ms, big; } undo;   /* n held, top the next slot; kind/at/ms: the last change */
+
+static void undo_reset(void) { undo.n = 0; undo.kind = U_NONE; }
+/* before a change of `kind` (at: what it is about, a note's index or a pass): the riff kept, unless it continues
+ * the change before */
+static void undo_push(uint32_t kind, uint32_t at)
+{
+    const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
+    undo_t *u;
+    uint32_t i;
+    if (kind == undo.kind && at == undo.at && (kind == U_REC || fm1_ms - undo.ms < 1000u) && kind != U_ADD && kind != U_DEL) {
+        undo.ms = fm1_ms;
+        return;
+    }
+    undo.kind = kind; undo.at = at; undo.ms = fm1_ms;
+    if (f->count > UNDO_NOTES) { undo.n = 0; undo.big = 1; return; }   /* too big to keep: no undo past here */
+    undo.big = 0;
+    u = &undo_buf[undo.top];
+    u->count = f->count; u->steps = f->steps; u->quant = f->quant;
+    for (i = 0; i < f->count; i++) u->ev[i] = song.ev[f->first + i];
+    undo.top = (undo.top + 1u) % UNDO_N;
+    if (undo.n < UNDO_N) undo.n++;
+}
+static int undo_pop(void)                       /* the riff back as it was: 1 if there was something to undo */
+{
+    song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
+    const undo_t *u;
+    uint32_t i;
+    if (!undo.n) return 0;
+    undo.top = (undo.top + UNDO_N - 1u) % UNDO_N;
+    undo.n--;
+    u = &undo_buf[undo.top];
+    seq_busy = 1;
+    riff_clear(&song, rif.trk, rif.r);
+    f->steps = u->steps; f->quant = u->quant;
+    for (i = 0; i < u->count; i++)
+        riff_note_put(&song, rif.trk, rif.r, u->ev[i].start, u->ev[i].tick, u->ev[i].len, u->ev[i].note, u->ev[i].vel);
+    seq_busy = 0;
+    undo.kind = U_NONE;                         /* (the next change is a change of its own) */
+    if (rif.step >= f->steps) rif.step = f->steps - 1u;
+    if (rif.left >= f->steps) rif.left = 0;
+    seq_bars = song_bars(&song);
+    return 1;
 }
 
 static void draw_rif_rows(uint32_t r0, uint32_t nr, uint32_t pos)   /* rows r0 .. r0 + nr - 1 of the roll */
@@ -1575,10 +1630,11 @@ static void edt_input(int32_t dsel, int32_t dalg, int32_t dk1)
         if (edt.tab == TAB_RIFF && edt.row == 1u) {   /* the quantise */
             song_riff_t *fq = &song.riff[rif.trk][rif.r - 1u];
             uint32_t q = (uint32_t)clamp((int32_t)fq->quant + dk1, 0, (int32_t)RIFF_QUANTS - 1);
-            if (q != fq->quant) { fq->quant = (uint8_t)q; edited(); }
+            if (q != fq->quant) { undo_push(U_QUANT, 0); fq->quant = (uint8_t)q; edited(); }
         } else if (edt.tab == TAB_RIFF) {       /* the riff's length */
             uint32_t st = (uint32_t)clamp((int32_t)f->steps + dk1, 1, (int32_t)RIFF_MAX_STEPS);
             if (st != f->steps) {
+                undo_push(U_STEPS, 0);
                 seq_busy = 1;
                 riff_set_steps(&song, rif.trk, rif.r, st);
                 seq_busy = 0;
@@ -1590,6 +1646,7 @@ static void edt_input(int32_t dsel, int32_t dalg, int32_t dk1)
         } else {
             int32_t i = rif_note_here();
             if (i >= 0) {
+                undo_push(U_VEL, (uint32_t)i);
                 song.ev[i].vel = (uint8_t)clamp((int32_t)song.ev[i].vel + dk1, 1, 127);
                 audition_vel(song.ev[i].note, song.ev[i].vel);
                 edited();
@@ -1686,6 +1743,7 @@ static void rec_down(uint32_t note, uint32_t vel)
     if (rec.state != REC_ON || note > 127u) return;
     q = (fine + g * 128u) / (g * 256u) * g;     /* the nearest place on the grid */
     if (q >= len) q = 0;                        /* (past the end: the riff's start, next time round) */
+    undo_push(U_REC, seq_ticks / len);          /* (a time round: one undo) */
     seq_busy = 1;
     for (i = f->first; i < (uint32_t)f->first + f->count; i++) {   /* the same pitch running into it: cut */
         song_ev_t *e = &song.ev[i];
@@ -1866,6 +1924,7 @@ static void app_step(void)
                     riff_find(&song, f, (uint32_t)ns, e.tick, e.note, &found);
                     if (found) say("NO ROOM");
                     else {
+                        undo_push(U_MOVE, e.note);
                         seq_busy = 1;
                         riff_note_del_at(&song, rif.trk, rif.r, e.start, e.tick, e.note);
                         riff_note_put(&song, rif.trk, rif.r, (uint32_t)ns, e.tick, e.len, e.note, e.vel);
@@ -1889,6 +1948,7 @@ static void app_step(void)
                     riff_find(&song, f, e.start, e.tick, (uint32_t)nn, &found);
                     if (found) say("NO ROOM");
                     else {
+                        undo_push(U_PITCH, e.start * SONG_TPS + e.tick);
                         seq_busy = 1;
                         riff_note_del_at(&song, rif.trk, rif.r, e.start, e.tick, e.note);
                         riff_note_put(&song, rif.trk, rif.r, e.start, e.tick, e.len, (uint32_t)nn, e.vel);
@@ -1907,6 +1967,8 @@ static void app_step(void)
             if (i < 0) say("NO NOTE HERE");
             else {
                 song_ev_t *e = &song.ev[i];
+                undo_push(U_LEN, (uint32_t)i);
+                e = &song.ev[i];
                 e->len = (uint8_t)clamp((int32_t)e->len + d, 1, (int32_t)(f->steps - e->start));
                 if (rif.step >= (uint32_t)e->start + e->len) { rif.step = (uint32_t)e->start + e->len - 1u; rif_follow(); }
                 edited();
@@ -2023,20 +2085,26 @@ static void app_step(void)
         b &= ~((1u << BTN_OCT_DOWN) | (1u << BTN_OCT_UP));   /* (the octave keys answer here, they do not shift) */
     }
     if (ui.mode == M_RIF && b & ((1u << BTN_OCT_DOWN) | (1u << BTN_OCT_UP))) {   /* RIF: a note in / out */
-        if (b & (1u << BTN_OCT_UP)) {
-            if (rif_note_here() >= 0) say("A NOTE IS HERE");
-            else { int32_t ok; seq_busy = 1; ok = riff_note_set(&song, rif.trk, rif.r, rif.step, 1, rif.note, 100); seq_busy = 0;
-                   if (ok < 0) say("NO ROOM"); else { audition(rif.note); edited(); } }
-        }
-        if (b & (1u << BTN_OCT_DOWN)) {
-            int32_t i = rif_note_here();
-            if (i < 0) say("NO NOTE HERE");
-            else {
+        if (b & (1u << BTN_OCT_UP)) {           /* a note in; on a note: out */
+            int32_t i = rif_note_here(), ok;
+            if (i >= 0) {
+                undo_push(U_DEL, 0);
                 seq_busy = 1;
                 riff_note_del_at(&song, rif.trk, rif.r, song.ev[i].start, song.ev[i].tick, song.ev[i].note);
                 seq_busy = 0;
                 edited();
+            } else {
+                undo_push(U_ADD, 0);
+                seq_busy = 1; ok = riff_note_set(&song, rif.trk, rif.r, rif.step, 1, rif.note, 100); seq_busy = 0;
+                if (ok < 0) { say("NO ROOM"); undo_pop(); }
+                else { audition(rif.note); edited(); }
             }
+        }
+        if (b & (1u << BTN_OCT_DOWN)) {         /* undo */
+            uint32_t k;
+            for (k = 0; k < REC_HOLDS; k++) if (rec.hold[k].on) rec_up(rec.hold[k].note);
+            if (undo_pop()) { edited(); say("UNDO"); }
+            else say(undo.big ? "TOO MANY NOTES TO UNDO" : "NOTHING TO UNDO");
         }
         b &= ~((1u << BTN_OCT_DOWN) | (1u << BTN_OCT_UP));
         ui.dirty |= D_LANES | D_FOOT;
@@ -2099,8 +2167,8 @@ static void app_step(void)
     if (rec_lit() != rec.lit) { rec.lit = rec_lit(); ui.dirty |= D_HEAD; }   /* (blinking in rehearsal) */
     fm1_led_key(BTN_GLO, seq_click != 0);
     fm1_led_key(BTN_OCT_DOWN, ui.mode == M_PRJ ? prj.ask != 0 || (prj.sel != PRJ_AUTO && prj.used[prj.sel])
-                              : ui.mode == M_RIF ? rif_note_here() >= 0 : ui.oct < 2u);
-    fm1_led_key(BTN_OCT_UP, ui.mode == M_PRJ ? 1 : ui.mode == M_RIF ? rif_note_here() < 0 : ui.oct > 2u);
+                              : ui.mode == M_RIF ? undo.n != 0 : ui.oct < 2u);
+    fm1_led_key(BTN_OCT_UP, ui.mode == M_PRJ ? 1 : ui.mode == M_RIF ? 1 : ui.oct > 2u);
     fm1_led_key(BTN_SAVE, ui.mode == M_PRJ);
     fm1_led_key(BTN_SEQ, ui.mode == M_RIF);
     fm1_led_key(BTN_EDIT, ui.mode == M_EDT);

@@ -68,8 +68,8 @@ SEQ on a riff opens its piano roll; HOME or SEQ goes back. Time across, pitch up
 | Control | Does | In the simulator |
 | --- | --- | --- |
 | SELECT / ALGORITHM | the cursor: the step / the note | ← → / ↑ ↓ |
-| OCT+ | a note in at the cursor (1 step) | ] |
-| OCT− | the note under the cursor out | [ |
+| OCT+ | a note in at the cursor (1 step); on a note: the note out | ] |
+| OCT− | undo: the riff's last change (16 deep); recording, all you played on the last time round | [ |
 | KNOB 1 | move the note along the steps | Shift ← → |
 | KNOB 2 | move the note up / down | P, Shift P |
 | KNOB 3 | the note's length | A, G |
