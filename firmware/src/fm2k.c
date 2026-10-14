@@ -421,7 +421,6 @@ static void test_song(void)                     /* a chiptune at 140: Am F C G, 
  * red records. Riffs are raised green tiles, the one under the cursor mint. The footer shows the four knobs.
  * Everything is drawn in screen coordinates into strips of the canvas (strip_begin / strip_end): a strip is a band
  * of the screen, at most 64 rows, and anything outside it is clipped. */
-#include "fm2k_sprites.h"
 /* the ground */
 #define C_BG RGB(6, 10, 34)
 #define C_BG_STRIPE RGB(10, 16, 48)
@@ -567,15 +566,14 @@ static void display(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t fill)  
 {
     well(x, y, w, h, fill, C_METAL_TOP, C_METAL_SHADE, C_METAL_LIT);
 }
-static void sprite(int32_t x, int32_t y, const sprite_t *s)   /* centred on x, y, blended onto what is there */
+static int32_t txt(int32_t x, int32_t y, const felucca_font_t *f, const char *s, uint16_t c);
+/* a knob's name ("K1"): flat, light letters in a small black display, so it reads as a label, not a knob */
+static int32_t knob_chip(int32_t x, int32_t y, uint32_t k, uint16_t ground)
 {
-    int32_t i, j;
-    x -= s->w / 2 - 1; y -= s->h / 2 - 1;
-    for (j = 0; j < s->h; j++)
-        for (i = 0; i < s->w; i++) {
-            uint32_t a = s->a[j * s->w + i];
-            if (a) cv_pset(x + i, y + j, a >= 16u ? s->px[j * s->w + i] : mix565(cv_get(x + i, y + j), s->px[j * s->w + i], a));
-        }
+    char s[3] = {'K', (char)('1' + k), 0};
+    well(x, y, 17, 12, C_LCD, ground, C_METAL_SHADE, C_METAL_LIT);
+    txt(x + 3, y + 1, &FONT_XS, s, C_LCD_INK);
+    return x + 17;
 }
 
 /* the layout: a 22 px header, the body (a well, 23 .. 214), a 24 px footer */
@@ -957,9 +955,9 @@ static void draw_foot_knobs(const char *k1, const char *k2, const char *k3, cons
     else
         for (k = 0; k < 4u; k++) {
             int32_t x = (int32_t)k * 60;
-            if (k) { cv_rect(x, FOOT_Y + 5, 1, 14, C_METAL_SHADE); cv_rect(x + 1, FOOT_Y + 5, 1, 14, C_METAL_LIT); }
-            sprite(x + 11, FOOT_Y + 12, &SPR_KNOB);
-            if (lab[k]) txt(x + 21, FOOT_Y + 8, &FONT_XS, lab[k], C_INK);
+            if (!lab[k]) continue;              /* (a knob with nothing to do here: nothing) */
+            knob_chip(x + 3, FOOT_Y + 6, k, C_METAL_TOP);
+            txt(x + 23, FOOT_Y + 7, &FONT_XS, lab[k], C_INK);
         }
     strip_end();
 }
@@ -1543,17 +1541,14 @@ static void paint_rif(void)
     body_edge_r(BODY_Y + 1, BODY_H - 2);
 }
 
-/* RIF's footer: the knobs, each with what it is at: the step, the note, the note's length, the zoom */
+/* RIF's footer: what K1-K4 do to the note under the cursor (its length shown when there is one), and the zoom */
 static void draw_rif_foot(void)
 {
-    char k1[8], k2[8], k3[8];
+    char k3[8];
     int32_t i = rif_note_here();
-    k1[copy_str(k1, "ST ", 4) + put_dec(k1 + 3, rif.step + 1u)] = 0;
-    if (rif.trk == SONG_DRUM_TRACK && drum_name(rif.note)) copy_str(k2, drum_name(rif.note), 6);
-    else note_name(k2, rif.note);
-    if (i >= 0) k3[copy_str(k3, "L ", 3) + put_dec(k3 + 2, song.ev[i].len)] = 0;
+    if (i >= 0) k3[copy_str(k3, "LEN ", 5) + put_dec(k3 + 4, song.ev[i].len)] = 0;
     else copy_str(k3, "LEN", 4);
-    draw_foot_knobs(k1, k2, k3, ZOOM_NAME[rif.zoom] + 5);
+    draw_foot_knobs("MOVE", "PITCH", k3, ZOOM_NAME[rif.zoom] + 5);
 }
 static void draw_rif(void) { paint_body(paint_rif); }
 
@@ -1633,8 +1628,7 @@ static void paint_edt(void)
         x = txt(14, y + 24, &FONT_L, s, sel ? C_ACC : C_TXT);
         txt(x + 6, y + 36, &FONT_S, unit, C_TXT2);
         if (sel) {                              /* the knob that turns it */
-            sprite(218, y + 15, &SPR_KNOB_L);
-            txt(192, y + 11, &FONT_XS, "K1", C_TXT2);
+            knob_chip(212, y + 8, 0, mix565(C_WELL, C_CELL, 14));
         }
         if (edt.tab == TAB_RIFF && r == 1u) {   /* a bar, a mark on each place of the grid, the beats taller */
             uint32_t g = RIFF_Q_TICKS[f->quant];

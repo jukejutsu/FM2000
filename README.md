@@ -134,7 +134,7 @@ firmware/src/platform.c   the FM-1 platform (boot, USB, updates, audio, panel, s
 web/                      the simulator's sources: the browser platform, the page, the audio worklet
 sim/                      the simulator, built
 tests/                    the model's tests and the host run
-tools/                    the build, the installer, the font and sprite generators
+tools/                    the build, the installer, the font generator
 ```
 
 The song model in short: `cell[bar][track]` starts a riff (1..32) or is empty; a riff plays on through its length
