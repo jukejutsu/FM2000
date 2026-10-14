@@ -413,25 +413,59 @@ static void test_song(void)                     /* a chiptune at 140: Am F C G, 
         song_place(&song, PLACE[i][0], PLACE[i][1], PLACE[i][2]);
 }
 
-/* ================================================================== the screen: ARRANGE, time left to right */
-/* the look: Felucca's soft shapes (rounded cards, values large, labels small) in Music 2000's colours: a deep
- * navy screen, navy cells with blue bar lines, green riffs, a bright blue accent, white text. */
-#define C_BG RGB(8, 12, 44)                     /* the screen */
-#define C_PANEL RGB(16, 24, 84)                 /* a card, the grid's cells */
-#define C_PANEL_HI RGB(26, 42, 132)             /* the chosen card */
-#define C_ACC RGB(70, 150, 255)                 /* blue */
-#define C_ON_ACC RGB(255, 255, 255)             /* text on the accent */
-#define C_TXT RGB(240, 244, 255)
-#define C_MID RGB(150, 168, 214)                /* labels */
-#define C_LOW RGB(52, 66, 128)                  /* idle, empty */
-#define C_PLAY RGB(110, 250, 110)
-#define C_RED RGB(255, 72, 56)
-/* the header and the footer: Music 2000's grey bars, a light edge on top, a dark one under */
-#define C_CHROME RGB(100, 104, 118)
-#define C_CHROME_HI RGB(150, 154, 170)
-#define C_CHROME_LO RGB(52, 54, 66)
-#define C_CHROME_INK RGB(24, 28, 44)            /* dark text on the grey */
-#define C_CHROME_OFF RGB(70, 74, 88)            /* an icon that is off */
+/* ================================================================== the design system (docs: the FM2K design system page)
+ * Music 2000's look, made for 240 x 240: a navy ground with broad faint diagonal bands; content in WELLS (recessed:
+ * dark edge top-left, lit edge bottom-right); controls and chrome on METAL (raised: a grey gradient, lit edge on
+ * top, shaded under; pressed: darker, the edges swapped); readouts in small black displays (the tempo in red LED).
+ * Type: Unbounded, wide and heavy (FONT_XS 8, FONT_S 10, FONT_M 13, FONT_L 22). One accent (blue); green plays,
+ * red records. Riffs are raised green tiles, the one under the cursor mint. The footer shows the four knobs.
+ * Everything is drawn in screen coordinates into strips of the canvas (strip_begin / strip_end): a strip is a band
+ * of the screen, at most 64 rows, and anything outside it is clipped. */
+#include "fm2k_sprites.h"
+/* the ground */
+#define C_BG RGB(6, 10, 34)
+#define C_BG_STRIPE RGB(10, 16, 48)
+/* wells */
+#define C_WELL RGB(10, 18, 56)
+#define C_WELL_DARK RGB(3, 5, 26)               /* a well's top and left edge */
+#define C_WELL_LIT RGB(28, 42, 110)             /* its bottom and right edge */
+#define C_CELL RGB(14, 26, 82)                  /* the grid's cells */
+#define C_CELL_ALT RGB(12, 22, 74)              /* every other 4 bars; the black keys' rows */
+#define C_LINE_BEAT RGB(22, 36, 110)            /* a bar (ARR), a step (RIF) */
+#define C_LINE_BAR RGB(36, 83, 214)             /* a beat (RIF), the ruler's rule */
+#define C_LINE_BAR4 RGB(79, 134, 255)           /* every 4 bars (ARR), a bar (RIF) */
+/* metal */
+#define C_METAL_TOP RGB(169, 175, 194)
+#define C_METAL_BOT RGB(102, 108, 130)
+#define C_METAL_LIT RGB(226, 230, 240)          /* the lit edge */
+#define C_METAL_SHADE RGB(43, 47, 64)           /* the shaded edge */
+#define C_INK RGB(14, 18, 38)                   /* text on metal */
+#define C_INK_SOFT RGB(58, 64, 88)              /* off, secondary, on metal */
+/* displays */
+#define C_LCD RGB(4, 7, 26)
+#define C_LCD_INK RGB(233, 238, 255)
+#define C_LED RGB(255, 59, 48)
+#define C_LED_BG RGB(20, 4, 10)
+/* content */
+#define C_RIFF_TOP RGB(95, 219, 116)            /* a riff: its lit edge, its body, its shade, its notes */
+#define C_RIFF RGB(45, 170, 74)
+#define C_RIFF_BOT RGB(22, 104, 43)
+#define C_RIFF_NOTE RGB(10, 58, 22)
+#define C_SEL_TOP RGB(210, 255, 240)            /* the riff (the note) under the cursor */
+#define C_SEL RGB(124, 242, 198)
+#define C_SEL_BOT RGB(59, 184, 146)
+#define C_SEL_NOTE RGB(13, 74, 57)
+#define C_TXT RGB(242, 245, 255)                /* text on the dark */
+#define C_TXT2 RGB(142, 155, 200)               /* labels */
+#define C_TXT3 RGB(72, 85, 143)                 /* idle, empty */
+#define C_ACC RGB(61, 123, 255)                 /* the accent: chosen values, the loop */
+#define C_PLAY RGB(92, 255, 122)
+#define C_RED RGB(255, 59, 48)
+#define C_KEY_W RGB(201, 206, 221)              /* the piano's keys */
+#define C_KEY_W2 RGB(174, 180, 200)
+#define C_KEY_B RGB(11, 14, 30)
+#define C_KEY_B2 RGB(58, 64, 96)
+#define C_KEY_GAP RGB(107, 114, 144)
 
 /* a + (b - a) * t / 16, in RGB565 */
 static uint16_t mix565(uint16_t a, uint16_t b, uint32_t t)
@@ -440,39 +474,122 @@ static uint16_t mix565(uint16_t a, uint16_t b, uint32_t t)
     return (uint16_t)(((ra + (rb - ra) * (int32_t)t / 16) << 11) | ((ga + (gb - ga) * (int32_t)t / 16) << 5) |
                       (ba + (bb - ba) * (int32_t)t / 16));
 }
-/* a card: a rectangle with soft corners (radius 4, edged by blending into bg) */
+static uint16_t cv_get(int32_t x, int32_t y)    /* the canvas's pixel (screen coordinates in a strip), 0 outside */
+{
+    y += cv_oy;
+    if ((uint32_t)x < cv_w && (uint32_t)y < cv_h) return swap16(cv_px[(uint32_t)y * cv_w + (uint32_t)x]);
+    return 0;
+}
+
+/* a strip: rows sy .. sy + h - 1 of the screen, the ground in it; drawn into in screen coordinates */
+static uint32_t strip_y;
+static void ground(int32_t x, int32_t y, int32_t w, int32_t h)   /* the navy, its bands 18 px wide */
+{
+    int32_t i, j;
+    for (j = y; j < y + h; j++)
+        for (i = x; i < x + w; i++)
+            cv_pset(i, j, ((i + j) / 18) & 1 ? C_BG_STRIPE : C_BG);
+}
+static void strip_begin(uint32_t sy, uint32_t h)
+{
+    cv_oy = 0;
+    cv_begin(240, h, C_BG);
+    cv_oy = -(int32_t)sy;
+    strip_y = sy;
+    ground(0, (int32_t)sy, 240, (int32_t)h);
+}
+static void strip_end(void) { cv_oy = 0; cv_blit(0, strip_y); }
+static void strip_begin_flat(uint32_t sy, uint32_t h)   /* a strip something covers whole (no ground under it) */
+{
+    cv_oy = 0;
+    cv_begin(240, h, C_WELL);
+    cv_oy = -(int32_t)sy;
+    strip_y = sy;
+}
+
+/* soft corners (radius 4): a shape's corner pixels blended towards the ground g */
 static const uint8_t CORNER[4][4] = {{0, 4, 11, 15}, {4, 15, 16, 16}, {11, 16, 16, 16}, {15, 16, 16, 16}};
-static void card_corners(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t c, uint16_t bg, uint32_t left, uint32_t right)
+static void corners(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t g, uint32_t left, uint32_t right)
 {
     int32_t i, j;
     for (j = 0; j < 4; j++)
         for (i = 0; i < 4; i++) {
-            uint16_t k = mix565(bg, c, CORNER[j][i]);
-            if (CORNER[j][i] == 16u) continue;
-            if (left) { cv_pset(x + i, y + j, k); cv_pset(x + i, y + h - 1 - j, k); }
-            if (right) { cv_pset(x + w - 1 - i, y + j, k); cv_pset(x + w - 1 - i, y + h - 1 - j, k); }
+            uint32_t t = CORNER[j][i];
+            if (t == 16u) continue;
+            if (left) {
+                cv_pset(x + i, y + j, mix565(g, cv_get(x + i, y + j), t));
+                cv_pset(x + i, y + h - 1 - j, mix565(g, cv_get(x + i, y + h - 1 - j), t));
+            }
+            if (right) {
+                cv_pset(x + w - 1 - i, y + j, mix565(g, cv_get(x + w - 1 - i, y + j), t));
+                cv_pset(x + w - 1 - i, y + h - 1 - j, mix565(g, cv_get(x + w - 1 - i, y + h - 1 - j), t));
+            }
         }
 }
-static void card(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t c, uint16_t bg)
+static void vgrad(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t c0, uint16_t c1)   /* top c0 to bottom c1 */
 {
-    cv_rect(x, y, w, h, c);
-    if (w >= 8 && h >= 8) card_corners(x, y, w, h, c, bg, 1, 1);
+    int32_t j;
+    for (j = 0; j < h; j++) cv_rect(x, y + j, w, 1, mix565(c0, c1, h > 1 ? (uint32_t)(j * 16 / (h - 1)) : 0u));
 }
-static void chrome_bar(uint32_t h)              /* a canvas h tall with the grey bar in it, bevelled */
+/* raised: a gradient, a lit edge on top (and, softer, left), a shaded one under (and right) */
+static void bevel(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t top, uint16_t bot, uint16_t lit, uint16_t shade,
+                  uint16_t g, uint32_t round_l, uint32_t round_r)
 {
-    cv_begin(240, h, C_BG);
-    card(1, 1, 238, (int32_t)h - 2, C_CHROME, C_BG);
-    cv_rect(4, 1, 232, 1, C_CHROME_HI);
-    cv_rect(4, (int32_t)h - 2, 232, 1, C_CHROME_LO);
+    vgrad(x, y, w, h, top, bot);
+    cv_rect(x + 2, y, w - 4, 1, lit);
+    cv_rect(x + 2, y + h - 1, w - 4, 1, shade);
+    if (round_l) cv_rect(x, y + 2, 1, h - 4, mix565(lit, top, 6));
+    if (round_r) cv_rect(x + w - 1, y + 2, 1, h - 4, mix565(shade, bot, 6));
+    if (w >= 8 && h >= 8) corners(x, y, w, h, g, round_l, round_r);
+}
+static void metal(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t g)
+{
+    bevel(x, y, w, h, C_METAL_TOP, C_METAL_BOT, C_METAL_LIT, C_METAL_SHADE, g, 1, 1);
+}
+static void metal_pressed(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t g)
+{
+    bevel(x, y, w, h, C_METAL_BOT, mix565(C_METAL_BOT, C_METAL_TOP, 6), C_METAL_SHADE, C_METAL_LIT, g, 1, 1);
+}
+/* recessed: dark edges top and left, lit bottom and right; dark / lit 0: the defaults */
+static void well(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t fill, uint16_t g, uint16_t dark, uint16_t lit)
+{
+    if (!dark) dark = C_WELL_DARK;
+    if (!lit) lit = C_WELL_LIT;
+    cv_rect(x, y, w, h, fill);
+    cv_rect(x + 1, y, w - 2, 1, dark);
+    cv_rect(x, y + 1, 1, h - 2, dark);
+    cv_rect(x + 1, y + 1, w - 2, 1, mix565(dark, fill, 8));
+    cv_rect(x + 1, y + h - 1, w - 2, 1, lit);
+    cv_rect(x + w - 1, y + 1, 1, h - 2, mix565(lit, fill, 6));
+    if (w >= 8 && h >= 8) corners(x, y, w, h, g, 1, 1);
+}
+static void display(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t fill)   /* a black display set in metal */
+{
+    well(x, y, w, h, fill, C_METAL_TOP, C_METAL_SHADE, C_METAL_LIT);
+}
+static void sprite(int32_t x, int32_t y, const sprite_t *s)   /* centred on x, y, blended onto what is there */
+{
+    int32_t i, j;
+    x -= s->w / 2 - 1; y -= s->h / 2 - 1;
+    for (j = 0; j < s->h; j++)
+        for (i = 0; i < s->w; i++) {
+            uint32_t a = s->a[j * s->w + i];
+            if (a) cv_pset(x + i, y + j, a >= 16u ? s->px[j * s->w + i] : mix565(cv_get(x + i, y + j), s->px[j * s->w + i], a));
+        }
 }
 
-#define HEAD_H 20                               /* the header */
-#define RULER_Y 20                              /* the bar numbers */
+/* the layout: a 22 px header, the body (a well, 23 .. 214), a 24 px footer */
+#define HEAD_H 22
+#define BODY_Y 23
+#define BODY_H 192
+#define FOOT_Y 216
+#define FOOT_H 24
+#define RULER_Y BODY_Y                          /* ARR: the ruler (with the well's top edge) */
 #define RULER_H 16
-#define LANE_Y 36                               /* the four tracks */
-#define LANE_H 46
-#define FOOT_Y 220
-#define GX 40                                   /* the lanes start right of the track labels */
+#define LANE_Y (RULER_Y + RULER_H)              /* the four tracks */
+#define LANE_H 43
+#define GX 40                                   /* the lanes start right of the track tabs */
+static uint32_t put_dec(char *p, uint32_t v);
 static const uint8_t ZOOM_BW[4] = {50, 25, 12, 6};   /* a bar's width at 2x 1x 0.5x 0.25x: 4 8 16 32 bars in 200 px */
 static const char *const ZOOM_NAME[4] = {"ZOOM 2X", "ZOOM 1X", "ZOOM 0.5X", "ZOOM 0.25X"};
 #define BW ((int32_t)ZOOM_BW[ui.zoom])
@@ -558,181 +675,139 @@ static uint32_t copy_str(char *d, const char *s, uint32_t max)   /* returns the 
     return i;
 }
 
-/* text on a coloured ground: gfx.c's cv_text blends onto black, this blends from `bg` to `c` (black text on a
- * riff's block would otherwise get dark fringes) */
-/* text on a ground, drawn only between x0 and x1 (a name cut off at its box's edges) */
-static void cv_text_clip(int32_t x, int32_t y, const felucca_font_t *f, const char *s, uint16_t c, uint16_t bg,
-                         int32_t x0, int32_t x1)
+/* text blended onto whatever is under it (metal, a gradient, a riff), drawn only between x0 and x1 */
+static int32_t text_x(int32_t x, int32_t y, const felucca_font_t *f, const char *s, uint16_t c, int32_t x0, int32_t x1)
 {
-    uint16_t ramp[16];
-    uint32_t a;
-    for (a = 0; a < 16u; a++) ramp[a] = mix565(bg, c, a * 16u / 15u);
     for (; *s; s++) {
         uint32_t gi = glyph(f, (uint8_t)*s), gx, gy, w = f->bw[gi], bpr = (w + 1u) / 2u;
         const uint8_t *gd = f->data + f->off[gi];
         for (gy = 0; gy < f->h; gy++)
             for (gx = 0; gx < w; gx++) {
                 uint32_t v = gd[gy * bpr + gx / 2u];
-                int32_t px = x - f->pad + (int32_t)gx;
+                int32_t px = x - f->pad + (int32_t)gx, py = y + (int32_t)gy;
                 v = (gx & 1u) ? (v & 15u) : (v >> 4);
-                if (v && px >= x0 && px < x1) cv_pset(px, y + (int32_t)gy, ramp[v]);
-            }
-        x += f->adv[gi];
-    }
-}
-
-static int32_t cv_text_on(int32_t x, int32_t y, const felucca_font_t *f, const char *s, uint16_t c, uint16_t bg)
-{
-    uint16_t ramp[16];
-    int32_t r0 = bg >> 11, g0 = (bg >> 5) & 63, b0 = bg & 31, r1 = c >> 11, g1 = (c >> 5) & 63, b1 = c & 31, a;
-    for (a = 0; a < 16; a++)
-        ramp[a] = (uint16_t)(((r0 + (r1 - r0) * a / 15) << 11) | ((g0 + (g1 - g0) * a / 15) << 5) | (b0 + (b1 - b0) * a / 15));
-    for (; *s; s++) {
-        uint32_t gi = glyph(f, (uint8_t)*s), gx, gy, w = f->bw[gi], bpr = (w + 1u) / 2u;
-        const uint8_t *gd = f->data + f->off[gi];
-        for (gy = 0; gy < f->h; gy++)
-            for (gx = 0; gx < w; gx++) {
-                uint32_t v = gd[gy * bpr + gx / 2u];
-                v = (gx & 1u) ? (v & 15u) : (v >> 4);
-                if (v) cv_pset(x - f->pad + (int32_t)gx, y + (int32_t)gy, ramp[v]);
+                if (v && px >= x0 && px < x1) cv_pset(px, py, v == 15u ? c : mix565(cv_get(px, py), c, v * 16u / 15u));
             }
         x += f->adv[gi];
     }
     return x;
 }
-
-/* the header's icons: 11 x 11, a row a string, '#' = ink */
-static const char *const ICON_PLAY[11] = {
-    "##.........", "####.......", "######.....", "########...", "##########.", "###########",
-    "##########.", "########...", "######.....", "####.......", "##........."};
-static const char *const ICON_REC[11] = {
-    "...#####...", ".#########.", ".#########.", "###########", "###########", "###########",
-    "###########", "###########", ".#########.", ".#########.", "...#####..."};
-static const char *const ICON_LOOP[11] = {
-    "........#..", "..######.#.", ".#.......##", "#........#.", "#.......#..", "#.........#",
-    "..#.......#", ".#........#", "##.......#.", ".#.######..", "..#........"};
-static const char *const ICON_METRO[11] = {
-    "....###...#", "....#.#..#.", "...#...##..", "...#..##...", "..#..##.#..", "..#.##..#..",
-    ".#..#....#.", ".#.#.....#.", "#.........#", "###########", "###########"};
-
-static void cv_icon(int32_t x, int32_t y, const char *const *rows, uint16_t c)
+static int32_t txt(int32_t x, int32_t y, const felucca_font_t *f, const char *s, uint16_t c)
 {
-    int32_t i, j;
-    for (j = 0; j < 11; j++)
-        for (i = 0; i < 11; i++)
-            if (rows[j][i] == '#') cv_pset(x + i, y + j, c);
+    return text_x(x, y, f, s, c, -10000, 10000);
+}
+/* (the older two: the ground they took is no longer needed) */
+static int32_t cv_text_on(int32_t x, int32_t y, const felucca_font_t *f, const char *s, uint16_t c, uint16_t bg)
+{
+    (void)bg;
+    return txt(x, y, f, s, c);
+}
+static void cv_text_clip(int32_t x, int32_t y, const felucca_font_t *f, const char *s, uint16_t c, uint16_t bg,
+                         int32_t x0, int32_t x1)
+{
+    (void)bg;
+    text_x(x, y, f, s, c, x0, x1);
 }
 
-/* the header: the screen's short name, the transport's state, the tempo. Screen names are short: ARR (the
- * arrangement), and later RIF (a riff), SND (a sound), MIX, SNG (song settings), SYS */
+/* small icons: a row a string, '#' = ink */
+static const char *const ICON_PLAY[7] = {".#.......", ".###.....", ".#####...", ".#######.", ".#####...", ".###.....", ".#......."};
+static const char *const ICON_REC[7] = {"..###..", ".#####.", "#######", "#######", "#######", ".#####.", "..###.."};
+static const char *const ICON_LOOP[7] = {"..#####..", ".#.....#.", "#.......#", "#.......#", "#....#..#", ".#..###..", "....#####"};
+static const char *const ICON_METRO[7] = {"...###...", "...#.#..#", "..#...##.", "..#..##..", ".#..#..#.", ".#.....#.", "#########"};
+static const char *const ICON_FLAG[6] = {"#.....", "####..", "#####.", "####..", "#.....", "#....."};
+
+static int32_t cv_icon(int32_t x, int32_t y, const char *const *rows, uint32_t n, uint16_t c)   /* returns its width */
+{
+    int32_t i, j, w = 0;
+    for (j = 0; j < (int32_t)n; j++)
+        for (i = 0; rows[j][i]; i++) {
+            if (rows[j][i] == '#') cv_pset(x + i, y + j, c);
+            if (i + 1 > w) w = i + 1;
+        }
+    return w;
+}
+
+/* the header: metal; the screen's name (and, small, what it is about), the transport in the middle, the tempo in
+ * a red LED display. Screen names are short: ARR, PRJ, RIF, EDT; later SND, MIX, SNG, SYS */
+static const char *head_ctx;                    /* the context after the name (RIF and EDT: the riff), or 0 */
 static void draw_head(const char *screen)
 {
-    char bpm[8] = "000.0";
-    const char *v;
-    int32_t x = (240 - (4 * 11 + 3 * 8)) / 2 - 8, w;   /* the four icons, 8 px apart, a little left of the middle */
-    put_num(bpm, song.bpm10 / 10u, 3);
-    bpm[4] = (char)('0' + song.bpm10 % 10u);
-    chrome_bar(HEAD_H);
-    cv_text_on(8, 1, &FONT_M, screen, C_TXT, C_CHROME);
-    cv_icon(x, 5, ICON_PLAY, seq_play ? C_PLAY : C_CHROME_OFF);
-    cv_icon(x + 19, 5, ICON_REC, rec_lit() ? C_RED : C_CHROME_OFF);
-    cv_icon(x + 38, 5, ICON_LOOP, song.loop_end > song.loop_start ? C_ACC : C_CHROME_OFF);
-    cv_icon(x + 57, 5, ICON_METRO, seq_click ? C_ACC : C_CHROME_OFF);
-    v = bpm[0] == '0' ? bpm + 1 : bpm;          /* the tempo, right, in a dark display as on Music 2000 */
-    w = text_w(&FONT_M, v) + 10;
-    card(236 - w, 3, w, 14, C_BG, C_CHROME);
-    cv_text_on(241 - w, 0, &FONT_M, v, C_ACC, C_BG);
-    cv_blit(0, 0);
+    char bpm[8];
+    int32_t x, w;
+    uint32_t n, i;
+    strip_begin(0, HEAD_H + 1);
+    metal(0, 0, 240, HEAD_H, C_BG);
+    x = txt(7, 3, &FONT_M, screen, C_INK);
+    if (head_ctx) txt(x + 6, 6, &FONT_S, head_ctx, C_INK_SOFT);
+    {   /* the transport: play, record, loop, metronome; lit when on */
+        const char *const *ic[4] = {ICON_PLAY, ICON_REC, ICON_LOOP, ICON_METRO};
+        uint16_t on[4] = {seq_play ? C_PLAY : 0, rec_lit() ? C_RED : 0, song.loop_end > song.loop_start ? C_ACC : 0,
+                          seq_click ? C_ACC : 0};
+        x = 98;
+        for (i = 0; i < 4u; i++) x += cv_icon(x, 7, ic[i], 7, on[i] ? on[i] : C_INK_SOFT) + 6;
+    }
+    n = put_dec(bpm, song.bpm10 / 10u);         /* the tempo: "145", "145.5" */
+    if (song.bpm10 % 10u) { bpm[n++] = '.'; bpm[n++] = (char)('0' + song.bpm10 % 10u); }
+    bpm[n] = 0;
+    w = text_w(&FONT_M, bpm) + 12;
+    display(237 - w, 3, w, 16, C_LED_BG);
+    txt(237 - w + 6, 3, &FONT_M, bpm, C_LED);
+    strip_end();
 }
 
-static int32_t xstep(uint32_t step)             /* a step's x on ARR (left of GX: off the view, under the labels) */
+static int32_t xstep(uint32_t step)             /* a step's x on ARR (left of GX: off the view, under the tabs) */
 {
     return GX + ((int32_t)step - (int32_t)VIEW) * BW / (int32_t)STEPS_PER_BAR;
 }
 
+static void body_well(void) { well(0, BODY_Y, 240, BODY_H, C_WELL, C_BG, 0, 0); }   /* (clipped to the strip) */
+static void body_edge_r(int32_t y, int32_t h)   /* the well's right edge again, over what slid past it */
+{
+    cv_rect(238, y, 1, h, C_WELL);
+    cv_rect(239, y, 1, h, mix565(C_WELL_LIT, C_WELL, 6));
+}
+
+/* the ruler: bar numbers (every 4th with a flag, as on Music 2000; zoomed out, fewer), the cursor's in the accent,
+ * the loop as a line over its bars, a rule under it all */
 static void draw_ruler(void)
 {
     uint32_t bar, fb = VIEW / STEPS_PER_BAR, lb = (VIEW + COLS * STEPS_PER_BAR + STEPS_PER_BAR - 1u) / STEPS_PER_BAR;
-    cv_begin(240, RULER_H, C_BG);
+    int32_t y = RULER_Y;
+    strip_begin(RULER_Y, RULER_H);
+    body_well();
     for (bar = fb; bar < lb && bar < SONG_BARS; bar++) {
         int32_t x = xstep(bar * STEPS_PER_BAR);
+        uint32_t four = !(bar % 4u), cur = bar == ui.bar, every = ui.zoom == 3u ? 8u : ui.zoom == 2u ? 4u : 1u;
         char num[4];
-        uint32_t len;
-        len = bar + 1u >= 100u ? 3u : bar + 1u >= 10u ? 2u : 1u;
-        put_num(num, bar + 1u, len);
-        num[len] = 0;
-        if (bar == ui.bar) card(x, 1, BW < 22 ? 22 : BW, RULER_H - 2, C_PANEL_HI, C_BG);   /* the cursor's bar: a chip */
-        else cv_rect(x, RULER_H - (bar % 4u ? 3 : 5), 1, bar % 4u ? 3 : 5, bar % 4u ? C_LOW : C_MID);
-        if (ui.zoom <= ZOOM_1X || !(bar % (ui.zoom == 3u ? 8u : 4u)) || bar == ui.bar)   /* (zoomed out: every 4th, 8th) */
-            cv_text_on(x + (ui.zoom > ZOOM_1X && bar != ui.bar ? 1 : 4), -1, &FONT_S, num,
-                       bar == ui.bar ? C_ACC : bar % 4u ? C_MID : C_TXT, bar == ui.bar ? C_PANEL_HI : C_BG);
         if (song.loop_end > song.loop_start && bar >= song.loop_start && bar < song.loop_end)
-            cv_rect(x, 0, BW, 2, C_ACC);        /* the loop: a line over its bars */
+            cv_rect(x, y + 2, BW, 2, C_ACC);
+        if (!(bar % every) || cur) {
+            num[put_dec(num, bar + 1u)] = 0;
+            if (four) x += cv_icon(x + 2, y + 5, ICON_FLAG, 6, C_LINE_BAR4) + 3;
+            txt(x + 3, y + 4, &FONT_XS, num, cur ? C_ACC : four ? C_TXT : C_TXT3);
+        }
     }
-    cv_rect(0, 0, GX, RULER_H, C_BG);           /* (what slid off the left) */
-    cv_blit(0, RULER_Y);
+    cv_rect(1, y + 2, GX - 1, RULER_H - 2, C_WELL);   /* (what slid off the left) */
+    cv_rect(GX, y + RULER_H - 1, 238 - GX, 1, C_LINE_BAR);
+    body_edge_r(y + 1, RULER_H - 1);
+    strip_end();
 }
 
-/* a riff's block: a 1 px frame with rounded corners (radius 2), filled with `fill`; open_l / open_r: it goes on past
- * the view's edge there, so no side and no corners there */
-#define C_RIFF_EDGE C_MID
-#define C_RIFF_SEL_EDGE C_ACC
-#define C_RIFF_SEL C_PANEL_HI
-#define C_NOTE RGB(128, 128, 140)
-#define C_NOTE_SEL RGB(170, 255, 200)
-/* ARR: the grid, very faint, and the riffs as solid blocks with dark notes */
-#define C_GRID_BAR RGB(26, 40, 120)             /* a bar (on a card) */
-#define C_GRID_4 RGB(44, 88, 220)               /* every 4 bars: the Music 2000 blue */
-#define C_GRID_LANE RGB(30, 30, 38)             /* between the tracks */
-#define C_BLOCK RGB(44, 160, 60)                /* a riff: green */
-#define C_BLOCK_SEL RGB(96, 236, 196)           /* the riff under the cursor: mint */
-#define C_BLOCK_NOTE RGB(12, 64, 22)
-#define C_BLOCK_NOTE_SEL RGB(10, 86, 70)
-#define C_BLOCK_SPLIT RGB(24, 104, 36)          /* where a repeat begins */
-#define NOTES_MIN_W 24                          /* a riff narrower than this (its whole length, in px) shows no notes */
-#define C_BLOCK_SPLIT_SEL RGB(40, 170, 140)
-
-/* a solid block with its corners rounded (1 px off each); open_l / open_r: it goes on past the view's edge there */
-static uint16_t blk_bg = C_PANEL;               /* what a block's corners show through to */
-static void riff_block(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t open_l, uint32_t open_r, uint16_t c)
+/* a riff's tile: raised, green (mint under the cursor); open_l / open_r: it goes on past the view's edge there */
+static void riff_tile(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t open_l, uint32_t open_r, uint32_t lit, uint16_t g)
 {
+    uint16_t top = lit ? C_SEL_TOP : C_RIFF_TOP, mid = lit ? C_SEL : C_RIFF, bot = lit ? C_SEL_BOT : C_RIFF_BOT;
     if (w <= 0) return;
-    cv_rect(x, y, w, h, c);
-    if (w < 3) return;
-    if (!open_l) { cv_pset(x, y, blk_bg); cv_pset(x, y + h - 1, blk_bg); }
-    if (!open_r) { cv_pset(x + w - 1, y, blk_bg); cv_pset(x + w - 1, y + h - 1, blk_bg); }
-}
-static void riff_frame(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t open_l, uint32_t open_r, uint16_t edge,
-                       uint16_t fill)
-{
-    int32_t l = open_l ? 0 : 2, r = open_r ? 0 : 2;   /* where the straight top / bottom start and end */
-    if (w < 3) { cv_rect(x, y, w > 0 ? w : 1, h, edge); return; }
-    if (fill != C_BG) {
-        int32_t x0 = open_l ? x : x + 1, x1 = open_r ? x + w : x + w - 1;
-        cv_rect(x0, y + 1, x1 - x0, h - 2, fill);
-    }
-    cv_rect(x + l, y, w - l - r, 1, edge);                 /* top */
-    cv_rect(x + l, y + h - 1, w - l - r, 1, edge);         /* bottom */
-    if (!open_l) {
-        cv_rect(x, y + 2, 1, h - 4, edge);                 /* left side, and its corners */
-        cv_pset(x + 1, y + 1, edge);
-        cv_pset(x + 1, y + h - 2, edge);
-    }
-    if (!open_r) {
-        cv_rect(x + w - 1, y + 2, 1, h - 4, edge);
-        cv_pset(x + w - 2, y + 1, edge);
-        cv_pset(x + w - 2, y + h - 2, edge);
-    }
+    bevel(x, y, w, h, mix565(mid, top, 6), mid, top, bot, g, !open_l, !open_r);
 }
 
-/* a riff's notes inside its block, as a DAW shows a clip: time across, pitch up, the riff's own range filling the
- * block's height. off = the riff's step at x, vis bars of it in view, w px wide */
-static void draw_notes(uint32_t t, const song_riff_t *f, uint32_t off, int32_t x, uint32_t vis, int32_t w, uint16_t ink)
+/* a riff's notes inside its tile, as a DAW shows a clip: time across, pitch up, the riff's own range filling the
+ * tile's height. off = the riff's step at x, vis bars of it in view, w px wide, ly the lane's top */
+static void draw_notes(int32_t ly, const song_riff_t *f, uint32_t off, int32_t x, uint32_t vis, int32_t w, uint16_t ink)
 {
-    const int32_t top = 7, h = LANE_H - 15;     /* the area inside the block */
+    const int32_t top = ly + 7, h = LANE_H - 15;
     uint32_t i, lo = 127, hi = 0, end = off + vis * STEPS_PER_BAR;
     int32_t range, nh;
-    (void)t;
     for (i = f->first; i < (uint32_t)f->first + f->count; i++) {
         if (song.ev[i].note < lo) lo = song.ev[i].note;
         if (song.ev[i].note > hi) hi = song.ev[i].note;
@@ -740,7 +815,7 @@ static void draw_notes(uint32_t t, const song_riff_t *f, uint32_t off, int32_t x
     if (!f->count) return;
     range = (int32_t)(hi - lo);
     nh = range <= 6 ? 4 : range <= 12 ? 3 : 2;
-    if (range < 4) range = 4;                   /* a few notes do not fill the block from edge to edge */
+    if (range < 4) range = 4;                   /* a few notes do not fill the tile from edge to edge */
     for (i = f->first; i < (uint32_t)f->first + f->count; i++) {
         const song_ev_t *e = &song.ev[i];
         uint32_t s = e->start, n = (uint32_t)e->start + e->len;
@@ -758,27 +833,29 @@ static void draw_notes(uint32_t t, const song_riff_t *f, uint32_t off, int32_t x
         cv_rect(x0, y, x1 - x0, nh, ink);
     }
 }
+#define NOTES_MIN_W 24                          /* a riff narrower than this (its whole length, in px) shows no notes */
 
-static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and its riffs; pos = the playhead step */
+static void draw_lane(uint32_t t, uint32_t pos)    /* one track: its tab, its cells, its riffs; pos = the playhead step */
 {
     uint32_t bar, sel = t == ui.trk;
     uint32_t fb = VIEW / STEPS_PER_BAR, lb = (VIEW + COLS * STEPS_PER_BAR + STEPS_PER_BAR - 1u) / STEPS_PER_BAR;
     const song_track_t *tr = &song.track[t];
-    char lab[8];
-    uint16_t pc = sel ? C_PANEL_HI : C_PANEL;   /* the track's card */
+    int32_t ly = LANE_Y + (int32_t)t * LANE_H;
+    char lab[4];
     if (lb > SONG_BARS) lb = SONG_BARS;
-    cv_begin(240, LANE_H, C_BG);
-    card(2, 1, 236, LANE_H - 2, pc, C_BG);
-    blk_bg = pc;
-    /* the grid under it all: a faint line on every bar, a less faint one every 4 bars, one under the track
-     * (zoomed out to 0.25x, only the 4-bar lines: a line every 6 px would be a grey wash) */
+    strip_begin_flat((uint32_t)ly, LANE_H);   /* (the well covers a lane's strip from edge to edge) */
+    body_well();
+    /* the cells: a bar each, every other 4 bars a shade darker; a line on each bar, a bright one every 4 (zoomed
+     * out to 0.25x only those: a line every 6 px would be a wash); a dark line under the track */
     for (bar = fb; bar <= lb; bar++) {
+        int32_t x = xstep(bar * STEPS_PER_BAR);
+        cv_rect(x, ly, BW, LANE_H, (bar / 4u) & 1u ? C_CELL_ALT : C_CELL);
         if (bar % 4u && ui.zoom == 3u) continue;
-        cv_rect(xstep(bar * STEPS_PER_BAR), 3, 1, LANE_H - 6, bar % 4u ? C_GRID_BAR : C_GRID_4);
+        cv_rect(x, ly, 1, LANE_H, bar % 4u ? C_LINE_BEAT : C_LINE_BAR4);
     }
-    /* the riffs: a riff and its repeats are one block, a line where each repeat begins; the repeat under the cursor
-     * lit; its notes drawn dark in it when the riff is at least NOTES_MIN_W px long on screen (a 4-bar riff still
-     * shows them at 0.25x, a 1-bar one only from 1x) */
+    cv_rect(GX, ly + LANE_H - 1, 238 - GX, 1, C_WELL_DARK);
+    /* the riffs: a riff and its repeats are one row of tiles, a line where each repeat begins; the repeat under the
+     * cursor lit; its notes drawn dark in it when the riff is at least NOTES_MIN_W px long on screen */
     for (bar = fb; bar < lb;) {
         uint32_t b0 = 0, r, end;
         r = song_at(&song, bar, t, &b0);
@@ -786,63 +863,66 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track, its label and i
         {
             const song_riff_t *f = &song.riff[t][r - 1u];
             uint32_t first, last, len = riff_bars(f), open_r, a, hb = ~0u;
-            int32_t y = 3, h = LANE_H - 7;
+            int32_t y = ly + 2, h = LANE_H - 5;
             song_chain(&song, t, b0, &first, &last, &end);
             if (end > lb) end = lb;
             open_r = song_block_end(&song, t, last) > lb;   /* it goes on past the view */
             if (sel && ui.bar >= first && ui.bar < end) song_at(&song, ui.bar, t, &hb);   /* the lit repeat */
-            for (a = first; a <= last; a += len) {          /* each repeat: its block, its line, its notes */
+            for (a = first; a <= last; a += len) {
                 uint32_t s0 = a > bar ? a : bar, s1 = a + len < end ? a + len : end, lit = a == hb;
                 uint32_t full = f->steps % STEPS_PER_BAR == 0u, e_st = a * STEPS_PER_BAR + f->steps;
                 int32_t xa = xstep(s0 * STEPS_PER_BAR), wa = xstep(s1 * STEPS_PER_BAR) - xa;
+                uint16_t g = (s0 / 4u) & 1u ? C_CELL_ALT : C_CELL;
                 if (s1 <= s0) continue;
-                if (!full) {                    /* a riff that ends inside a bar: its own block, as long as it is */
+                if (!full) {                    /* a riff that ends inside a bar: its own tile, as long as it is */
                     if (e_st < s1 * STEPS_PER_BAR) wa = xstep(e_st) - xa;
-                    riff_block(xa + (s0 == a ? 1 : 0), y, wa - (s0 == a ? 1 : 0) - 1, h, s0 != a,
-                               e_st > s1 * STEPS_PER_BAR, lit ? C_BLOCK_SEL : C_BLOCK);
+                    riff_tile(xa + (s0 == a ? 1 : 0), y, wa - (s0 == a ? 1 : 0) - 1, h, s0 != a, e_st > s1 * STEPS_PER_BAR, lit, g);
                 } else {
-                    riff_block(xa + (s0 == first ? 1 : 0), y, wa - (s0 == first ? 1 : 0) - (s1 == end && !open_r ? 1 : 0), h,
-                               s0 != first, s1 != end || open_r, lit ? C_BLOCK_SEL : C_BLOCK);
-                    if (a > bar) cv_rect(xa, y + 3, 1, h - 6, lit ? C_BLOCK_SPLIT_SEL : C_BLOCK_SPLIT);
+                    riff_tile(xa + (s0 == first ? 1 : 0), y, wa - (s0 == first ? 1 : 0) - (s1 == end && !open_r ? 1 : 0), h,
+                              s0 != first, s1 != end || open_r, lit, g);
+                    if (a > bar) cv_rect(xa, y + 3, 1, h - 6, lit ? C_SEL_BOT : C_RIFF_BOT);
                 }
-                if ((int32_t)len * BW >= NOTES_MIN_W)   /* notes when the riff is wide enough on screen to read them */
-                    draw_notes(t, f, (s0 - a) * STEPS_PER_BAR, xa + 1, s1 - s0, wa - 3, lit ? C_BLOCK_NOTE_SEL : C_BLOCK_NOTE);
+                if ((int32_t)len * BW >= NOTES_MIN_W)
+                    draw_notes(ly, f, (s0 - a) * STEPS_PER_BAR, xa + 1, s1 - s0, wa - 3, lit ? C_SEL_NOTE : C_RIFF_NOTE);
             }
             bar = end;
         }
     }
-    /* the cursor: a frame round the bar */
-    if (sel) {
+    if (sel) {                                  /* the cursor: a white frame round the bar */
         int32_t x = xstep(ui.bar * STEPS_PER_BAR);
-        riff_frame(x, 1, BW, LANE_H - 2, 0, 0, C_TXT, C_BG);
+        cv_rect(x - 1, ly, BW + 2, 1, C_TXT);
+        cv_rect(x - 1, ly + LANE_H - 2, BW + 2, 1, C_TXT);
+        cv_rect(x - 1, ly, 1, LANE_H - 1, C_TXT);
+        cv_rect(x + BW, ly, 1, LANE_H - 1, C_TXT);
     }
-    /* the playhead: a line at its step */
-    if (pos != ~0u) cv_rect(xstep(pos), 1, 2, LANE_H - 2, C_PLAY);
-    /* the card's edges again, over whatever slid past them; then the label: a numbered chip, the sound */
-    cv_rect(0, 0, GX, LANE_H, C_BG);
-    cv_rect(2, 1, GX - 2, LANE_H - 2, pc);
-    cv_rect(236, 0, 4, LANE_H, C_BG);
-    cv_rect(236, 1, 2, LANE_H - 2, pc);
-    card_corners(2, 1, 236, LANE_H - 2, pc, C_BG, 1, 1);
-    {   /* the label: a grey tab as on Music 2000, the track's number in a chip, its sound's name under it, cut
-         * at the tab's edge; on the chosen track a name too long for it scrolls */
+    if (pos != ~0u) cv_rect(xstep(pos), ly, 2, LANE_H - 1, C_PLAY);   /* the playhead */
+    body_edge_r(ly, LANE_H);
+    {   /* the track's tab: metal (pressed in when chosen), its number large, its sound's name in a small display
+         * under it, cut at the display's edges; on the chosen track a name too long for it scrolls */
         const char *name = sound_name(t);
-        int32_t tw = text_w(&FONT_S, name), x0 = 4, x1 = GX - 3, off = 0;
-        uint16_t ink = tr->flags & SONG_MUTE ? C_CHROME_OFF : sel ? C_TXT : C_CHROME_INK;
-        card(2, 1, GX - 3, LANE_H - 2, C_CHROME, C_BG);
-        cv_rect(5, 1, GX - 9, 1, C_CHROME_HI);
-        cv_rect(5, LANE_H - 2, GX - 9, 1, C_CHROME_LO);
-        card(6, 5, 18, 16, sel ? C_ACC : C_CHROME_LO, C_CHROME);
+        int32_t nw = text_w(&FONT_XS, name), x0 = 8, x1 = GX - 7, off = 0;
+        uint16_t ink = tr->flags & SONG_MUTE ? C_TXT3 : sel ? C_LCD_INK : C_TXT2;
+        cv_rect(1, ly, GX - 1, LANE_H, C_WELL);
+        if (sel) metal_pressed(2, ly + 1, GX - 4, LANE_H - 2, C_WELL);
+        else metal(2, ly + 1, GX - 4, LANE_H - 2, C_WELL);
         lab[0] = '0'; lab[1] = (char)('1' + t); lab[2] = 0;
-        cv_text_on(6 + (18 - text_w(&FONT_S, lab)) / 2, 5, &FONT_S, lab, C_ON_ACC, sel ? C_ACC : C_CHROME_LO);
-        if (sel && tw > x1 - x0) {              /* scrolls: a second away at the start, then a pixel every 60 ms */
-            uint32_t el = fm1_ms - ui.marq_t0, loop = (uint32_t)tw + 14u;
+        txt(6, ly + 4, &FONT_M, lab, sel ? C_ACC : C_INK);
+        well(5, ly + 22, GX - 10, 15, C_LCD, sel ? C_METAL_BOT : C_METAL_BOT, C_METAL_SHADE, C_METAL_LIT);
+        if (sel && nw > x1 - x0) {              /* scrolls: a second still at the start, then a pixel every 60 ms */
+            uint32_t el = fm1_ms - ui.marq_t0, loop = (uint32_t)nw + 12u;
             off = el < 1000u ? 0 : (int32_t)(((el - 1000u) / 60u) % loop);
-            cv_text_clip(x0 - off + (int32_t)loop, 25, &FONT_S, name, ink, C_CHROME, x0, x1);
+            text_x(x0 - off + (int32_t)loop, ly + 25, &FONT_XS, name, ink, x0, x1);
         }
-        cv_text_clip(x0 - off, 25, &FONT_S, name, ink, C_CHROME, x0, x1);
+        text_x(x0 - off, ly + 25, &FONT_XS, name, ink, x0, x1);
     }
-    if (!ph_only) cv_blit(0, LANE_Y + t * LANE_H);
+    if (!ph_only) strip_end();
+    else cv_oy = 0;
+}
+static void draw_lanes_end(void)                /* under the last track: the well's bottom edge */
+{
+    strip_begin(LANE_Y + SONG_TRACKS * LANE_H, FOOT_Y - (LANE_Y + SONG_TRACKS * LANE_H));
+    body_well();
+    strip_end();
 }
 
 /* the lane drawn as ever, but only columns x0 .. x0 + w - 1 sent to the screen (the playhead's bar, between slides) */
@@ -860,30 +940,30 @@ static void draw_lane_cols(uint32_t t, uint32_t pos, int32_t x0, int32_t w)
     ph_only = 0;
 }
 
-static void draw_foot(void)
+/* the footer: metal; the four knobs and what each does on this screen; a message takes it for a moment */
+static int msg_on(void) { return ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0; }
+static void foot_text(const char *s, uint16_t c)   /* a line in a display across the footer */
 {
-    char s[32];
-    uint32_t b0 = 0, r = song_at(&song, ui.bar, ui.trk, &b0), n;
-    chrome_bar(20);
-    if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0) {   /* a short message after a change */
-        cv_text_on(8, 2, &FONT_S, ui.msg, C_TXT, C_CHROME);
-        cv_blit(0, FOOT_Y);
-        return;
-    }
-    n = copy_str(s, sound_name(ui.trk), 9);     /* the track's sound, left */
-    cv_text_on(8, 2, &FONT_S, s, C_TXT, C_CHROME);
-    if (r) {                                    /* the riff under the cursor, right */
-        const song_riff_t *f = &song.riff[ui.trk][r - 1u];
-        s[0] = 'R';
-        put_num(s + 1, r, 2);
-        s[3] = ' ';
-        n = 4u + copy_str(s + 4, f->name, RIFF_NAME);
-        if (b0 != ui.bar) { s[n++] = ' '; s[n++] = '+'; s[n++] = (char)('0' + (ui.bar - b0)); s[n] = 0; }
-    } else
-        copy_str(s, "--", 3);
-    cv_text_on(240 - 8 - text_w(&FONT_S, s), 2, &FONT_S, s, C_CHROME_INK, C_CHROME);
-    cv_blit(0, FOOT_Y);
+    display(3, FOOT_Y + 4, 234, 16, C_LCD);
+    txt(9, FOOT_Y + 5, &FONT_S, s, c);
 }
+static void draw_foot_knobs(const char *k1, const char *k2, const char *k3, const char *k4)
+{
+    const char *lab[4] = {k1, k2, k3, k4};
+    uint32_t k;
+    strip_begin(FOOT_Y, FOOT_H);
+    metal(0, FOOT_Y, 240, FOOT_H, C_BG);
+    if (msg_on()) foot_text(ui.msg, C_LCD_INK);
+    else
+        for (k = 0; k < 4u; k++) {
+            int32_t x = (int32_t)k * 60;
+            if (k) { cv_rect(x, FOOT_Y + 5, 1, 14, C_METAL_SHADE); cv_rect(x + 1, FOOT_Y + 5, 1, 14, C_METAL_LIT); }
+            sprite(x + 11, FOOT_Y + 12, &SPR_KNOB);
+            if (lab[k]) txt(x + 21, FOOT_Y + 8, &FONT_XS, lab[k], C_INK);
+        }
+    strip_end();
+}
+static void draw_foot(void) { draw_foot_knobs("MOVE", "REPS", "LOOP", "ZOOM"); }
 
 /* ================================================================== the main loop */
 static void say(const char *s)                  /* a message in the footer for 1.5 s */
@@ -945,8 +1025,6 @@ static int32_t clamp(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : v
  * row's project, or makes a new one in an empty slot; OCT- clears the slot. A question (clear? discard the
  * changes? overwrite?) waits for OCT+ yes / OCT- no. SAVE held 2 s, anywhere, saves: on PRJ into the row's slot
  * (save as), elsewhere into the project's own slot; not while playing (an erase stops the sound). */
-#define PRJ_ROW_Y 22
-#define PRJ_ROW_H 22
 #define SAVE_HOLD_MS 2000u
 #define SAVE_TAP_MS 300u                        /* shorter: a tap (the menu); longer: the countdown shows */
 
@@ -968,27 +1046,33 @@ static const char *const ICON_TRASH[16] = {     /* a bin, 16 x 16 */
     "...#..#..#..#...", "...#..#..#..#...", "...#..#..#..#...", "...#..#..#..#...",
     "...#..#..#..#...", "...#..#..#..#...", "...##########...", "................"};
 
-/* a box in the middle of the screen: an icon, a title, a line under it (the countdown, the slot) */
+/* a plate in the middle of the screen: metal, the icon lit in a dark display, a title, a line under it, and (for a
+ * countdown) a bar filling up */
 static struct { uint32_t on, until; } splash;
 static const char *const *splash_icon = ICON_DISK;
-static void draw_splash(const char *title, const char *sub, uint16_t ink)   /* a grey metal plate, the icon lit in a dark well */
+static int32_t splash_prog = -1;                /* the bar: 0..16, or -1 for none */
+#define SPLASH_X 24
+#define SPLASH_Y 84
+static void draw_splash(const char *title, const char *sub, uint16_t ink)
 {
     int32_t i, j;
-    cv_begin(184, 64, C_BG);
-    card(0, 0, 184, 64, C_CHROME, C_BG);
-    cv_rect(4, 0, 176, 1, C_CHROME_HI); cv_rect(0, 4, 1, 56, C_CHROME_HI);   /* lit from the top left */
-    cv_rect(4, 63, 176, 1, C_CHROME_LO); cv_rect(183, 4, 1, 56, C_CHROME_LO);
-    cv_rect(4, 1, 176, 1, mix565(C_CHROME, C_CHROME_HI, 8));
-    card(10, 10, 44, 44, C_BG, C_CHROME);       /* the well */
-    cv_rect(14, 53, 36, 1, C_CHROME_HI);
+    cv_oy = 0;
+    cv_begin(192, 74, C_BG);
+    metal(0, 0, 192, 74, C_BG);
+    display(10, 10, 54, 54, C_LCD);
     for (j = 0; j < 16; j++)
         for (i = 0; i < 16; i++)
-            if (splash_icon[j][i] == '#') cv_rect(16 + i * 2, 16 + j * 2, 2, 2, ink);
-    cv_text_on(64, 12, &FONT_M, title, C_CHROME_INK, C_CHROME);
-    if (sub && *sub) cv_text_on(64, 34, &FONT_S, sub, C_TXT, C_CHROME);
-    cv_blit(28, 88);
+            if (splash_icon[j][i] == '#') cv_rect(21 + i * 2, 21 + j * 2, 2, 2, ink);
+    txt(76, 14, &FONT_M, title, C_INK);
+    if (sub && *sub) txt(76, 34, &FONT_S, sub, C_INK_SOFT);
+    if (splash_prog >= 0) {
+        display(76, 52, 104, 8, C_LCD);
+        cv_rect(77, 53, 102 * splash_prog / 16, 6, ink);
+    }
+    cv_blit(SPLASH_X, SPLASH_Y);
     splash.on = 1;
-    splash_icon = ICON_DISK;                    /* (the disk unless the next caller says otherwise) */
+    splash_icon = ICON_DISK;                    /* (the disk, no bar, unless the next caller says otherwise) */
+    splash_prog = -1;
 }
 static void splash_for(const char *title, const char *sub, uint16_t ink, uint32_t ms)   /* shown, then gone */
 {
@@ -1003,38 +1087,41 @@ static void slot_name(char *s, uint32_t slot)   /* "SLOT 3" */
     if (slot != PRJ_AUTO) { s[n++] = (char)('0' + slot); s[n] = 0; }
 }
 
-static void draw_prj_row(uint32_t slot)
+/* PRJ: the slots as rows in the well, the chosen one a metal key; the open project's number in the accent */
+#define PRJ_ROW_Y (BODY_Y + 3)
+#define PRJ_ROW_H 21
+static void paint_prj(void)
 {
-    const prj_head_t *h = &prj.head[slot];
-    uint32_t sel = slot == prj.sel, cur = slot == prj.cur && slot != PRJ_AUTO;
-    uint16_t bg = sel ? C_PANEL_HI : C_PANEL;
-    char s[24], lab[2] = {(char)(slot == PRJ_AUTO ? 'A' : '0' + slot), 0};
-    uint32_t n;
-    cv_begin(240, PRJ_ROW_H, C_BG);
-    card(4, 1, 232, PRJ_ROW_H - 2, bg, C_BG);
-    card(8, 3, 16, 16, cur ? C_ACC : sel ? C_LOW : C_BG, bg);   /* the slot's chip: lit for the open project */
-    cv_text_on(8 + (16 - text_w(&FONT_S, lab)) / 2, 2, &FONT_S, lab, cur ? C_ON_ACC : C_MID, cur ? C_ACC : sel ? C_LOW : C_BG);
-    if (!prj.used[slot]) {
-        cv_text_on(32, 2, &FONT_S, slot == PRJ_AUTO ? "NO AUTOSAVE" : "EMPTY", sel ? C_MID : C_LOW, bg);
-    } else {
+    uint32_t slot;
+    body_well();
+    for (slot = 0; slot < PRJ_SLOTS; slot++) {
+        const prj_head_t *h = &prj.head[slot];
+        uint32_t sel = slot == prj.sel, cur = slot == prj.cur && slot != PRJ_AUTO, n;
+        int32_t y = PRJ_ROW_Y + (int32_t)slot * PRJ_ROW_H;
+        char s[24], lab[2] = {(char)(slot == PRJ_AUTO ? 'A' : '0' + slot), 0};
+        if (sel) metal(4, y, 232, PRJ_ROW_H - 2, C_WELL);
+        else { cv_rect(4, y, 232, PRJ_ROW_H - 2, C_CELL); corners(4, y, 232, PRJ_ROW_H - 2, C_WELL, 1, 1); }
+        txt(11, y + 1, &FONT_M, lab, cur ? C_ACC : sel ? C_INK : C_TXT2);
+        if (!prj.used[slot]) {
+            txt(32, y + 3, &FONT_S, slot == PRJ_AUTO ? "NO AUTOSAVE" : "EMPTY", sel ? C_INK_SOFT : C_TXT3);
+            continue;
+        }
         n = copy_str(s, h->name, SONG_NAME);
         if (!n) n = copy_str(s, "UNTITLED", 9);
         if (cur && prj.unsaved) { s[n++] = '*'; s[n] = 0; }
-        cv_text_on(32, 2, &FONT_S, s, cur ? C_ACC : slot == PRJ_AUTO ? C_MID : C_TXT, bg);
+        txt(32, y + 3, &FONT_S, s, sel ? C_INK : slot == PRJ_AUTO ? C_TXT2 : C_TXT);
         n = put_dec(s, h->bars);
         copy_str(s + n, h->bars == 1u ? " BAR" : " BARS", 6);
-        cv_text_on(228 - text_w(&FONT_S, s), 2, &FONT_S, s, C_MID, bg);
+        txt(228 - text_w(&FONT_XS, s), y + 5, &FONT_XS, s, sel ? C_INK_SOFT : C_TXT2);
     }
-    cv_blit(0, PRJ_ROW_Y + slot * PRJ_ROW_H);
 }
-
 static void draw_prj_foot(void)
 {
     char s[32];
     uint32_t n;
-    chrome_bar(20);
-    if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0)
-        cv_text_on(8, 2, &FONT_S, ui.msg, C_TXT, C_CHROME);
+    strip_begin(FOOT_Y, FOOT_H);
+    metal(0, FOOT_Y, 240, FOOT_H, C_BG);
+    if (msg_on()) foot_text(ui.msg, C_LCD_INK);
     else if (prj.ask) {                         /* the question, and its two answers */
         static const char *const Q[] = {"", "CLEAR ", "DISCARD CHANGES?", "DISCARD CHANGES?", "OVERWRITE "};
         n = copy_str(s, Q[prj.ask], 20);
@@ -1043,22 +1130,28 @@ static void draw_prj_foot(void)
             n += 6u;
             s[n++] = '?'; s[n] = 0;
         }
-        cv_text_on(8, 2, &FONT_S, s, C_TXT, C_CHROME);
-        cv_text_on(234 - text_w(&FONT_S, "+ YES  - NO"), 2, &FONT_S, "+ YES  - NO", C_TXT, C_CHROME);
+        foot_text(s, C_LCD_INK);
+        txt(231 - text_w(&FONT_XS, "+ YES  - NO"), FOOT_Y + 8, &FONT_XS, "+ YES  - NO", C_TXT2);
     } else if (prj.sel == PRJ_AUTO)
-        cv_text_on(8, 2, &FONT_S, prj.used[0] ? "OCT+ LOAD" : "", C_CHROME_INK, C_CHROME);
+        foot_text(prj.used[0] ? "OCT+ LOAD" : "", C_TXT2);
     else if (prj.used[prj.sel])
-        cv_text_on(8, 2, &FONT_S, "OCT+ LOAD   OCT- CLEAR", C_CHROME_INK, C_CHROME);
+        foot_text("OCT+ LOAD   OCT- CLEAR", C_TXT2);
     else
-        cv_text_on(8, 2, &FONT_S, "OCT+ NEW   HOLD SAVE: SAVE", C_CHROME_INK, C_CHROME);
-    cv_blit(0, FOOT_Y);
+        foot_text("OCT+ NEW   HOLD SAVE: SAVE", C_TXT2);
+    strip_end();
 }
-
+static void paint_body(void (*paint)(void))     /* the body, strip by strip */
+{
+    uint32_t y;
+    for (y = BODY_Y; y < FOOT_Y; y += 64u) {
+        strip_begin(y, FOOT_Y - y < 64u ? FOOT_Y - y : 64u);
+        paint();
+        strip_end();
+    }
+}
 static void draw_prj(void)
 {
-    uint32_t s;
-    lcd_fill(0, HEAD_H, 240, PRJ_ROW_Y - HEAD_H, C_BG);   /* (the strip ARR's ruler leaves) */
-    for (s = 0; s < PRJ_SLOTS; s++) draw_prj_row(s);
+    paint_body(paint_prj);
     draw_prj_foot();
 }
 
@@ -1200,12 +1293,12 @@ static void prj_input(int32_t d, uint32_t b)
  *   KNOB 4               zoom, as on ARR: 8 / 16 / 32 / 64 steps in view
  *   REC                  record: the riff loops alone, the keys write onto its quantise grid (EDT); REC again:
  *                        rehearsal (REC blinks, nothing written), again: recording. PLAY or another screen: stop */
-#define RIF_KW 34                               /* the keyboard column */
+#define RIF_KW 30                               /* the keyboard column */
 #define RIF_SW ((int32_t)(24 >> rif.zoom))      /* a step's width: 24 12 6 3 px at 2x 1x 0.5x 0.25x */
 #define RIF_STEPS (8u << rif.zoom)              /* steps in view: 8 16 32 64 */
-#define RIF_RH 10                               /* a note row's height */
+#define RIF_RH 9                                /* a note row's height */
 #define RIF_ROWS 20                             /* rows in view */
-#define RIF_Y 20
+#define RIF_Y (BODY_Y + 6)
 
 static struct {
     uint32_t trk, r, at;                        /* the riff (track, id) and the bar the opened copy starts at */
@@ -1262,14 +1355,10 @@ static void note_name(char *s, uint32_t n)      /* "C#3" (C4 = 60) */
     if (n >= 12u) { s[k++] = (char)('0' + n / 12u - 1u); s[k] = 0; }
 }
 static int black_key(uint32_t n) { return (0x54Au >> (n % 12u)) & 1u; }
-#define C_KEY_WHITE RGB(150, 160, 190)          /* toned down: no glare */
-#define C_KEY_BLACK RGB(14, 18, 56)
-#define C_KEY_INK RGB(10, 14, 48)               /* labels on a white or lit key */
-#define C_KEY_LIT_ROW RGB(28, 64, 150)
-static uint16_t rif_row_bg(uint32_t n)          /* a note row's ground: a card's, a shade darker for the black keys */
+static uint16_t rif_row_bg(uint32_t n)          /* a note row's ground: a cell's, a shade darker for the black keys */
 {
-    if (rif.trk == SONG_DRUM_TRACK) return n & 1u ? RGB(12, 18, 66) : C_PANEL;
-    return black_key(n) ? RGB(11, 16, 60) : C_PANEL;
+    if (rif.trk == SONG_DRUM_TRACK) return n & 1u ? C_CELL_ALT : C_CELL;
+    return black_key(n) ? C_CELL_ALT : C_CELL;
 }
 static int key_down(uint32_t n)                 /* a key (or MIDI note on the track) plays note n now */
 {
@@ -1362,125 +1451,6 @@ static int undo_pop(void)                       /* the riff back as it was: 1 if
     return 1;
 }
 
-static void draw_rif_rows(uint32_t r0, uint32_t nr, uint32_t pos)   /* rows r0 .. r0 + nr - 1 of the roll */
-{
-    const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
-    uint32_t row, s, i, drums = rif.trk == SONG_DRUM_TRACK;
-    cv_begin(240, nr * RIF_RH, C_BG);
-    for (row = 0; row < nr; row++) {
-        uint32_t n = rif.top - (r0 + row), cur = n == rif.note;
-        int32_t y = (int32_t)(row * RIF_RH);
-        if ((int32_t)n < 0 || n > 127u) continue;
-        /* the row: darker for the black keys */
-        cv_rect(RIF_KW, y, 240 - RIF_KW, RIF_RH, rif_row_bg(n));
-        if (!drums && n % 12u == 0u) cv_rect(RIF_KW, y + RIF_RH - 1, 240 - RIF_KW, 1, C_GRID_4);   /* under each C */
-        {   /* the keyboard: white and black keys as on a piano, toned down; lilac while it is played */
-            uint32_t blk = black_key(n), lit = key_down(n);
-            uint16_t key = lit ? C_BLOCK_SEL : blk ? C_KEY_BLACK : C_KEY_WHITE;
-            cv_rect(0, y, RIF_KW - 2, RIF_RH, key);
-            if (!blk && (n % 12u == 0u || n % 12u == 5u))   /* the gap between two white keys: under C and F */
-                cv_rect(0, y + RIF_RH - 1, RIF_KW - 2, 1, C_KEY_BLACK);
-            if (lit) cv_rect(RIF_KW, y, 240 - RIF_KW, RIF_RH, C_KEY_LIT_ROW);   /* the row too, faintly */
-            if (cur) cv_rect(RIF_KW - 5, y + 1, 3, RIF_RH - 2, C_ACC);          /* the cursor's row: a mark */
-        }
-    }
-    /* the keys' labels, over the keys (a label is taller than its row): C on each octave and the cursor's note;
-     * on the drum track the drums the riff uses, the cursor's and the played ones */
-    for (row = 0; row < nr; row++) {
-        uint32_t n = rif.top - (r0 + row), cur = n == rif.note, lit, blk, used = 0;
-        int32_t y = (int32_t)(row * RIF_RH);
-        char s_[8];
-        const char *lab = 0;
-        if ((int32_t)n < 0 || n > 127u) continue;
-        lit = key_down(n);
-        blk = black_key(n);
-        if (drums) {
-            for (i = f->first; i < (uint32_t)f->first + f->count && !used; i++) used = song.ev[i].note == n;
-            if (used || cur || lit) lab = drum_name(n);
-        } else if (n % 12u == 0u || cur) { note_name(s_, n); lab = s_; }
-        if (lab) cv_text_on(3, y - 3, &FONT_S, lab, lit || !blk ? C_KEY_INK : C_TXT,
-                            lit ? C_BLOCK_SEL : blk ? C_KEY_BLACK : C_KEY_WHITE);
-    }
-    /* the steps: a faint line on each, stronger on the beats and the bars; past the riff's end, shaded */
-    for (s = 0; s <= RIF_STEPS; s++) {
-        uint32_t st = rif.left + s;
-        int32_t x = RIF_KW + (int32_t)(s * (uint32_t)RIF_SW);
-        if (st % 16u == 0u) cv_rect(x, 0, 1, (int32_t)(nr * RIF_RH), RGB(70, 130, 255));
-        else if (st % 4u == 0u) { if (RIF_SW >= 3) cv_rect(x, 0, 1, (int32_t)(nr * RIF_RH), C_GRID_4); }
-        else if (RIF_SW >= 6) cv_rect(x, 0, 1, (int32_t)(nr * RIF_RH), C_GRID_BAR);
-        if (s < RIF_STEPS && st >= f->steps) cv_rect(x + (RIF_SW > 3 ? 1 : 0), 0, RIF_SW > 3 ? RIF_SW - 1 : RIF_SW,
-                                                    (int32_t)(nr * RIF_RH), RGB(6, 9, 34));
-    }
-    /* the notes */
-    for (i = f->first; i < (uint32_t)f->first + f->count; i++) {   /* (in ticks: a recorded note may sit between steps) */
-        const song_ev_t *e = &song.ev[i];
-        uint32_t a = e->start * SONG_TPS + e->tick, t0 = a, t1 = a + e->len * SONG_TPS, row_ = rif.top - e->note;
-        uint32_t vl = rif.left * SONG_TPS, vr = (rif.left + RIF_STEPS) * SONG_TPS;
-        int32_t x0, x1, y;
-        if (e->note > rif.top || row_ < r0 || row_ >= r0 + nr) continue;
-        if (t1 > f->steps * SONG_TPS) t1 = f->steps * SONG_TPS;
-        if (t1 <= vl || t0 >= vr) continue;
-        if (t0 < vl) t0 = vl;
-        if (t1 > vr) t1 = vr;
-        x0 = RIF_KW + 1 + (int32_t)((t0 - vl) * (uint32_t)RIF_SW / SONG_TPS);
-        x1 = RIF_KW + (int32_t)((t1 - vl) * (uint32_t)RIF_SW / SONG_TPS) - (RIF_SW > 3 ? 1 : 0);
-        if (x1 <= x0) x1 = x0 + 1;
-        y = (int32_t)((row_ - r0) * RIF_RH) + 1;
-        blk_bg = rif_row_bg(e->note);
-        riff_block(x0, y, x1 - x0, RIF_RH - 2, t0 != a, 0,
-                   e->note == rif.note && rif.step >= e->start && rif.step < (uint32_t)e->start + e->len ? C_BLOCK_SEL : C_BLOCK);
-    }
-    /* the cursor, and the playhead when the opened copy plays */
-    if (rif.note <= rif.top && rif.top - rif.note >= r0 && rif.top - rif.note < r0 + nr) {
-        int32_t x = RIF_KW + (int32_t)((rif.step - rif.left) * (uint32_t)RIF_SW), y = (int32_t)((rif.top - rif.note - r0) * RIF_RH);
-        cv_rect(x, y, RIF_SW + 1, 1, C_TXT); cv_rect(x, y + RIF_RH - 1, RIF_SW + 1, 1, C_TXT);
-        cv_rect(x, y, 1, RIF_RH, C_TXT); cv_rect(x + RIF_SW, y, 1, RIF_RH, C_TXT);
-    }
-    if (pos != ~0u && pos >= rif.left && pos < rif.left + RIF_STEPS)
-        cv_rect(RIF_KW + (int32_t)((pos - rif.left) * (uint32_t)RIF_SW), 0, 2, (int32_t)(nr * RIF_RH),
-                rec.state == REC_ON ? C_RED : C_PLAY);   /* red while recording */
-    /* the roll is one card: its top corners on the first strip, its bottom ones on the last */
-    if (r0 == 0) card_corners(0, 0, 240, 1000, C_KEY_WHITE, C_BG, 1, 0), card_corners(0, 0, 240, 1000, rif_row_bg(rif.top), C_BG, 0, 1);
-    if (r0 + nr >= RIF_ROWS) {
-        int32_t h = (int32_t)(nr * RIF_RH);
-        card_corners(0, h - 1000, 240, 1000, C_KEY_WHITE, C_BG, 1, 0);
-        card_corners(0, h - 1000, 240, 1000, rif_row_bg(rif.top - RIF_ROWS + 1u), C_BG, 0, 1);
-    }
-    cv_blit(0, RIF_Y + r0 * RIF_RH);
-}
-
-static void draw_rif_foot(void)
-{
-    const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
-    char s[32], nn[6];
-    uint32_t n;
-    chrome_bar(20);
-    if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0) {
-        cv_text_on(8, 2, &FONT_S, ui.msg, C_TXT, C_CHROME);
-    } else if (rec.state) {                     /* recording: what, and on which grid */
-        n = copy_str(s, rec.state == REC_ON ? "REC  Q " : "REHEARSAL  Q ", 16);
-        copy_str(s + n, QUANT_NAME[f->quant], 7);
-        cv_text_on(8, 2, &FONT_S, s, rec.state == REC_ON ? RGB(150, 10, 0) : C_CHROME_INK, C_CHROME);
-    } else {
-        s[0] = 'R'; put_num(s + 1, rif.r, 2); s[3] = ' ';
-        n = 4u + copy_str(s + 4, f->name, RIFF_NAME);
-        s[n++] = ' '; s[n++] = ' ';
-        n += put_dec(s + n, f->steps);
-        copy_str(s + n, " ST", 4);
-        cv_text_on(8, 2, &FONT_S, s, C_TXT, C_CHROME);
-        n = put_dec(s, rif.step + 1u);         /* where the cursor is: the step, the note (and its length) */
-        s[n++] = ' '; s[n++] = ' ';
-        if (rif.trk == SONG_DRUM_TRACK && drum_name(rif.note)) n += copy_str(s + n, drum_name(rif.note), 6);
-        else { note_name(nn, rif.note); n += copy_str(s + n, nn, 5); }
-        {
-            int32_t i = rif_note_here();
-            if (i >= 0) { n += copy_str(s + n, "  L", 4); put_dec(s + n, song.ev[i].len); s[n + (song.ev[i].len >= 10u ? 2 : 1)] = 0; }
-        }
-        cv_text_on(232 - text_w(&FONT_S, s), 2, &FONT_S, s, C_CHROME_INK, C_CHROME);
-    }
-    cv_blit(0, FOOT_Y);
-}
-
 static uint32_t rif_pos(void)                   /* the playhead's step in the opened copy of the riff, or ~0 */
 {
     uint32_t st;
@@ -1492,14 +1462,100 @@ static uint32_t rif_pos(void)                   /* the playhead's step in the op
     return st < song.riff[rif.trk][rif.r - 1u].steps ? st : ~0u;
 }
 
-static void draw_rif(void)
+/* RIF drawn: the keyboard (ivory keys, ebony ones laid over them; on the drum track plain rows named by their
+ * drums), the rows (a shade darker for the black keys), the grid (a line a step, brighter a beat, brightest a bar,
+ * shaded past the riff's end), the notes as raised tiles (mint under the cursor), the cursor, the playhead */
+static void paint_rif(void)
 {
-    uint32_t pos = rif_pos();
-    draw_rif_rows(0, 6, pos);                   /* in strips: the canvas holds 240 x 64 */
-    draw_rif_rows(6, 6, pos);
-    draw_rif_rows(12, 6, pos);
-    draw_rif_rows(18, 2, pos);
+    const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
+    uint32_t row, s, i, drums = rif.trk == SONG_DRUM_TRACK, pos = rif_pos();
+    const int32_t y0 = RIF_Y, gh = RIF_ROWS * RIF_RH;
+    body_well();
+    for (row = 0; row < RIF_ROWS; row++) {
+        uint32_t n = rif.top - row, lit, blk;
+        int32_t y = y0 + (int32_t)(row * RIF_RH);
+        if ((int32_t)n < 0 || n > 127u) continue;
+        lit = key_down(n);
+        blk = !drums && black_key(n);
+        cv_rect(RIF_KW, y, 238 - RIF_KW, RIF_RH, rif_row_bg(n));
+        if (!drums && n % 12u == 0u) cv_rect(RIF_KW, y + RIF_RH - 1, 238 - RIF_KW, 1, C_LINE_BAR);   /* under each C */
+        if (drums) cv_rect(2, y, RIF_KW - 4, RIF_RH, n & 1u ? C_KEY_W2 : C_KEY_W);
+        else vgrad(2, y, RIF_KW - 4, RIF_RH, C_KEY_W, C_KEY_W2);
+        if (blk) {                              /* an ebony key over the ivory, 60 % of the width, raised */
+            vgrad(2, y + 1, 16, RIF_RH - 1, C_KEY_B2, C_KEY_B);
+            cv_rect(17, y + 1, 1, RIF_RH - 1, 0);
+            cv_rect(2, y + RIF_RH - 1, 16, 1, 0);
+        }
+        if (!drums && (n % 12u == 0u || n % 12u == 5u)) cv_rect(2, y + RIF_RH - 1, RIF_KW - 4, 1, C_KEY_GAP);
+        if (lit) {                              /* played now: the key mint, its row lit faintly */
+            cv_rect(2, y, blk ? 16 : RIF_KW - 4, RIF_RH - 1, C_SEL);
+            cv_rect(RIF_KW, y, 238 - RIF_KW, RIF_RH, mix565(rif_row_bg(n), C_ACC, 5));
+        }
+        if (n == rif.note) cv_rect(RIF_KW - 3, y + 1, 2, RIF_RH - 2, C_ACC);   /* the cursor's row: a mark */
+    }
+    for (row = 0; row < RIF_ROWS; row++) {      /* the keys' labels: C on each octave, the cursor's note; drums by name */
+        uint32_t n = rif.top - row, used = 0, blk;
+        int32_t y = y0 + (int32_t)(row * RIF_RH);
+        char s_[8];
+        const char *lab = 0;
+        if ((int32_t)n < 0 || n > 127u) continue;
+        blk = !drums && black_key(n);
+        if (drums) {
+            for (i = f->first; i < (uint32_t)f->first + f->count && !used; i++) used = song.ev[i].note == n;
+            if (used || n == rif.note || key_down(n)) lab = drum_name(n);
+        } else if (n % 12u == 0u || n == rif.note) { note_name(s_, n); lab = s_; }
+        if (lab) text_x(drums || blk ? 4 : 13, y, &FONT_XS, lab, blk && !key_down(n) ? C_TXT : C_INK, 2, RIF_KW - 2);
+    }
+    for (s = 0; s <= RIF_STEPS; s++) {          /* the grid; past the riff's end, shaded */
+        uint32_t st = rif.left + s;
+        int32_t x = RIF_KW + (int32_t)(s * (uint32_t)RIF_SW);
+        if (st % 16u == 0u) cv_rect(x, y0, 1, gh, C_LINE_BAR4);
+        else if (st % 4u == 0u) { if (RIF_SW >= 3) cv_rect(x, y0, 1, gh, C_LINE_BAR); }
+        else if (RIF_SW >= 6) cv_rect(x, y0, 1, gh, C_LINE_BEAT);
+        if (s < RIF_STEPS && st >= f->steps) cv_rect(x + (RIF_SW > 3 ? 1 : 0), y0, RIF_SW > 3 ? RIF_SW - 1 : RIF_SW, gh, C_WELL_DARK);
+    }
+    for (i = f->first; i < (uint32_t)f->first + f->count; i++) {   /* the notes (in ticks: a recorded one may sit between steps) */
+        const song_ev_t *e = &song.ev[i];
+        uint32_t a = e->start * SONG_TPS + e->tick, t0 = a, t1 = a + e->len * SONG_TPS, row_ = rif.top - e->note;
+        uint32_t vl = rif.left * SONG_TPS, vr = (rif.left + RIF_STEPS) * SONG_TPS, sel;
+        int32_t x0, x1, y;
+        if (e->note > rif.top || row_ >= RIF_ROWS) continue;
+        if (t1 > f->steps * SONG_TPS) t1 = f->steps * SONG_TPS;
+        if (t1 <= vl || t0 >= vr) continue;
+        if (t0 < vl) t0 = vl;
+        if (t1 > vr) t1 = vr;
+        x0 = RIF_KW + 1 + (int32_t)((t0 - vl) * (uint32_t)RIF_SW / SONG_TPS);
+        x1 = RIF_KW + (int32_t)((t1 - vl) * (uint32_t)RIF_SW / SONG_TPS);
+        if (x1 <= x0) x1 = x0 + 1;
+        y = y0 + (int32_t)(row_ * RIF_RH) + 1;
+        sel = e->note == rif.note && rif.step >= e->start && rif.step < (uint32_t)e->start + e->len;
+        bevel(x0, y, x1 - x0, RIF_RH - 1, sel ? mix565(C_SEL, C_SEL_TOP, 6) : mix565(C_RIFF, C_RIFF_TOP, 6),
+              sel ? C_SEL : C_RIFF, sel ? C_SEL_TOP : C_RIFF_TOP, sel ? C_SEL_BOT : C_RIFF_BOT, rif_row_bg(e->note),
+              t0 == a, t1 < vr || (uint32_t)e->start + e->len <= f->steps);
+    }
+    if (rif.note <= rif.top && rif.top - rif.note < RIF_ROWS) {   /* the cursor: a white frame on its step */
+        int32_t x = RIF_KW + (int32_t)((rif.step - rif.left) * (uint32_t)RIF_SW), y = y0 + (int32_t)((rif.top - rif.note) * RIF_RH);
+        cv_rect(x, y, RIF_SW + 1, 1, C_TXT); cv_rect(x, y + RIF_RH, RIF_SW + 1, 1, C_TXT);
+        cv_rect(x, y, 1, RIF_RH + 1, C_TXT); cv_rect(x + RIF_SW, y, 1, RIF_RH + 1, C_TXT);
+    }
+    if (pos != ~0u && pos >= rif.left && pos < rif.left + RIF_STEPS)   /* the playhead: red while recording */
+        cv_rect(RIF_KW + (int32_t)((pos - rif.left) * (uint32_t)RIF_SW), y0, 2, gh, rec.state == REC_ON ? C_RED : C_PLAY);
+    body_edge_r(BODY_Y + 1, BODY_H - 2);
 }
+
+/* RIF's footer: the knobs, each with what it is at: the step, the note, the note's length, the zoom */
+static void draw_rif_foot(void)
+{
+    char k1[8], k2[8], k3[8];
+    int32_t i = rif_note_here();
+    k1[copy_str(k1, "ST ", 4) + put_dec(k1 + 3, rif.step + 1u)] = 0;
+    if (rif.trk == SONG_DRUM_TRACK && drum_name(rif.note)) copy_str(k2, drum_name(rif.note), 6);
+    else note_name(k2, rif.note);
+    if (i >= 0) k3[copy_str(k3, "L ", 3) + put_dec(k3 + 2, song.ev[i].len)] = 0;
+    else copy_str(k3, "LEN", 4);
+    draw_foot_knobs(k1, k2, k3, ZOOM_NAME[rif.zoom] + 5);
+}
+static void draw_rif(void) { paint_body(paint_rif); }
 
 /* ================================================================== EDT: the riff's settings (EDIT on RIF) */
 /* Tabs (SELECT): RIFF, and NOTE when the cursor is on a note. ALGORITHM picks a row, KNOB 1 changes its value.
@@ -1511,8 +1567,6 @@ enum { TAB_RIFF, TAB_NOTE };
 static struct { uint32_t tab, row; } edt;
 static const char *const EDT_TAB[2] = {"RIFF", "NOTE"};
 static const uint32_t EDT_ROWS[2] = {2, 1};
-#define EDT_ROW_Y 44
-#define EDT_ROW_H 24
 
 static void edt_value(char *s, uint32_t tab, uint32_t row)   /* the row's value as text */
 {
@@ -1530,51 +1584,33 @@ static void edt_value(char *s, uint32_t tab, uint32_t row)   /* the row's value 
     }
 }
 
-static void draw_edt(void)
+/* EDT drawn: the tabs as metal keys (the open one pressed in, its LED lit), each setting in a well of its own (its
+ * name, its value large, the chosen one's in the accent with K1's knob beside it, a gauge along the bottom) */
+#define EDT_TAB_Y (BODY_Y + 4)
+#define EDT_ROW_Y (BODY_Y + 31)
+#define EDT_ROW_H 74
+static void paint_edt(void)
 {
     uint32_t tb, r, has_note = rif_note_here() >= 0;
     char s[24];
-    /* the tabs: pills, the open one lit */
-    cv_begin(240, 24, C_BG);
     for (tb = 0; tb < 2u; tb++) {
-        int32_t x = 6 + (int32_t)tb * 78, w = 72, on = tb == edt.tab, off = tb == TAB_NOTE && !has_note;
-        card(x, 3, w, 19, on ? C_ACC : C_PANEL, C_BG);
-        cv_text_on(x + (w - text_w(&FONT_S, EDT_TAB[tb])) / 2, 4, &FONT_S, EDT_TAB[tb],
-                   on ? C_ON_ACC : off ? C_LOW : C_MID, on ? C_ACC : C_PANEL);
+        int32_t x = 4 + (int32_t)tb * 80, on = tb == edt.tab, off = tb == TAB_NOTE && !has_note;
+        if (on) metal_pressed(x, EDT_TAB_Y, 76, 22, C_BG);
+        else metal(x, EDT_TAB_Y, 76, 22, C_BG);
+        cv_rect(x + 8, EDT_TAB_Y + 9, 6, 4, on ? C_ACC : C_INK_SOFT);   /* the key's LED */
+        if (on) cv_rect(x + 7, EDT_TAB_Y + 8, 8, 1, mix565(C_ACC, C_TXT, 6));
+        txt(x + 20, EDT_TAB_Y + 5, &FONT_S, EDT_TAB[tb], off ? C_INK_SOFT : C_INK);
     }
-    cv_blit(0, 20);
-    lcd_fill(0, 44, 240, FOOT_Y - 44, C_BG);
-    /* what it is about: the riff, and the note */
-    cv_begin(240, 20, C_BG);
-    {
-        const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
-        uint32_t n;
-        s[0] = 'R'; put_num(s + 1, rif.r, 2); s[3] = ' ';
-        n = 4u + copy_str(s + 4, f->name, RIFF_NAME);
-        if (edt.tab == TAB_NOTE && has_note) {
-            char nn[6];
-            n += copy_str(s + n, "  ", 3);
-            if (rif.trk == SONG_DRUM_TRACK && drum_name(rif.note)) n += copy_str(s + n, drum_name(rif.note), 6);
-            else { note_name(nn, rif.note); n += copy_str(s + n, nn, 5); }
-            n += copy_str(s + n, " @", 3);
-            n += put_dec(s + n, rif.step + 1u);
-            s[n] = 0;
-        }
-        cv_text_on(8, 2, &FONT_S, s, C_MID, C_BG);
-    }
-    cv_blit(0, 46);
-    /* each setting a card: its name small, its value large in the accent, a bar of it along the bottom */
     for (r = 0; r < EDT_ROWS[edt.tab]; r++) {
         static const char *const NAME[2][2] = {{"LENGTH", "QUANTIZE"}, {"VELOCITY", ""}};
         static const char *const UNIT[2][2] = {{"STEPS", ""}, {"", ""}};
         const char *unit = UNIT[edt.tab][r];
         const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
         uint32_t sel = r == edt.row, v = 0, vmax = 1, k;
-        uint16_t bg = sel ? C_PANEL_HI : C_PANEL;
-        int32_t x;
-        cv_begin(240, 64, C_BG);
-        card(6, 0, 228, 64, bg, C_BG);
-        cv_text_on(16, 3, &FONT_S, NAME[edt.tab][r], sel ? C_TXT : C_MID, bg);
+        int32_t x, y = EDT_ROW_Y + (int32_t)r * (EDT_ROW_H + 6);
+        char nn[16];
+        well(4, y, 232, EDT_ROW_H, sel ? mix565(C_WELL, C_CELL, 14) : C_WELL, C_BG, 0, 0);
+        txt(14, y + 8, &FONT_S, NAME[edt.tab][r], sel ? C_TXT : C_TXT2);
         if (edt.tab == TAB_RIFF && r == 1u) {   /* the grid: "1/8" and TRIPLET */
             const char *q = QUANT_NAME[f->quant];
             for (k = 0; q[k] && q[k] != 'T'; k++) s[k] = q[k];
@@ -1582,36 +1618,43 @@ static void draw_edt(void)
             if (q[k] == 'T') unit = "TRIPLET";
         } else {
             if (edt.tab == TAB_RIFF) { v = f->steps; vmax = RIFF_MAX_STEPS; }
-            else if (has_note) { v = song.ev[rif_note_here()].vel; vmax = 127; }
+            else if (has_note) {                /* the note it is about, after the value: "C4 @ 5" */
+                uint32_t n;
+                v = song.ev[rif_note_here()].vel; vmax = 127;
+                if (rif.trk == SONG_DRUM_TRACK && drum_name(rif.note)) n = copy_str(nn, drum_name(rif.note), 6);
+                else { note_name(nn, rif.note); n = copy_str(nn, nn, 5); }
+                n += copy_str(nn + n, " @ ", 4);
+                nn[n + put_dec(nn + n, rif.step + 1u)] = 0;
+                unit = nn;
+            }
             if (edt.tab == TAB_NOTE && !has_note) copy_str(s, "-", 2);
             else { k = put_dec(s, v); s[k] = 0; }
         }
-        x = cv_text_on(16, 19, &FONT_L, s, C_ACC, bg);
-        cv_text_on(x + 6, 32, &FONT_S, unit, C_MID, bg);
-        if (edt.tab == TAB_RIFF && r == 1u) {   /* a bar, a mark on each place of the grid, the beats lit */
+        x = txt(14, y + 24, &FONT_L, s, sel ? C_ACC : C_TXT);
+        txt(x + 6, y + 36, &FONT_S, unit, C_TXT2);
+        if (sel) {                              /* the knob that turns it */
+            sprite(218, y + 15, &SPR_KNOB_L);
+            txt(192, y + 11, &FONT_XS, "K1", C_TXT2);
+        }
+        if (edt.tab == TAB_RIFF && r == 1u) {   /* a bar, a mark on each place of the grid, the beats taller */
             uint32_t g = RIFF_Q_TICKS[f->quant];
-            cv_rect(16, 56, 208, 1, C_LOW);
-            for (k = 0; k < STEPS_PER_BAR * SONG_TPS; k += g)
-                cv_rect(16 + (int32_t)(k * 208u / (STEPS_PER_BAR * SONG_TPS)), 52, 2, 7, k % 24u ? C_BLOCK : C_ACC);
+            cv_rect(14, y + 64, 212, 1, C_LINE_BEAT);
+            for (k = 0; k < STEPS_PER_BAR * SONG_TPS; k += g) {
+                int32_t bx = 14 + (int32_t)(k * 212u / (STEPS_PER_BAR * SONG_TPS)), beat = k % 24u == 0u;
+                cv_rect(bx, y + (beat ? 58 : 60), 2, beat ? 8 : 5, beat ? C_TXT : C_TXT2);
+            }
         } else if (edt.tab == TAB_RIFF) {       /* the steps, a cell each, the riff's lit, a gap every bar */
             for (k = 0; k < RIFF_MAX_STEPS; k++)
-                cv_rect(16 + (int32_t)(k * 3u) + (int32_t)(k / 16u) * 2, 54, 2, 4,
-                        k < v ? (k % 4u ? C_BLOCK : C_ACC) : C_LOW);
+                cv_rect(14 + (int32_t)(k * 3u) + (int32_t)(k / 16u) * 4, y + 60, 2, 6,
+                        k < v ? (k % 4u ? C_RIFF : C_RIFF_TOP) : C_CELL);
         } else {                                /* a level */
-            cv_rect(16, 55, 208, 3, C_LOW);
-            cv_rect(16, 55, (int32_t)(208u * v / vmax), 3, C_ACC);
+            cv_rect(14, y + 62, 212, 3, C_CELL);
+            cv_rect(14, y + 62, (int32_t)(212u * v / vmax), 3, C_ACC);
         }
-        cv_blit(0, 70 + r * 68);
     }
 }
-
-static void draw_edt_foot(void)
-{
-    chrome_bar(20);
-    if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0) cv_text_on(8, 2, &FONT_S, ui.msg, C_TXT, C_CHROME);
-    else cv_text_on(8, 2, &FONT_S, "K1 VALUE   EDIT BACK", C_CHROME_INK, C_CHROME);
-    cv_blit(0, FOOT_Y);
-}
+static void draw_edt(void) { paint_body(paint_edt); }
+static void draw_edt_foot(void) { draw_foot_knobs("VALUE", 0, 0, 0); }
 
 static void edt_input(int32_t dsel, int32_t dalg, int32_t dk1)
 {
@@ -1825,8 +1868,11 @@ static void save_button(uint32_t b, uint32_t rel)
             uint32_t left = (SAVE_HOLD_MS - el + 99u) / 100u;   /* tenths of a second */
             if (left != hold.shown) {
                 char s[8];
+                uint32_t t = ui.mode == M_PRJ && prj.sel != PRJ_AUTO ? prj.sel : prj.cur;   /* (as save_now) */
                 hold.shown = left;
-                s[0] = (char)('0' + left / 10u); s[1] = '.'; s[2] = (char)('0' + left % 10u); s[3] = 0;
+                if (t == PRJ_NONE || t == PRJ_AUTO) copy_str(s, "HOLD", 5);
+                else slot_name(s, t);
+                splash_prog = (int32_t)(el * 16u / SAVE_HOLD_MS);   /* the bar fills as SAVE is held */
                 draw_splash("SAVING", s, C_ACC);
                 splash.until = 0;               /* (until the countdown ends or SAVE is let go) */
             }
@@ -2208,6 +2254,11 @@ static void app_step(void)
     }
     if (splash.on) return;                      /* (the splash stays on top: nothing drawn under it) */
     if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) <= 0) { ui.msg_until = 0; ui.dirty |= D_FOOT; }
+    {   /* the header's context: on RIF and EDT the riff ("R03") */
+        static char ctx[4];
+        ctx[0] = 'R'; put_num(ctx + 1, rif.r, 2); ctx[3] = 0;
+        head_ctx = ui.mode == M_RIF || ui.mode == M_EDT ? ctx : 0;
+    }
     if (ui.mode == M_EDT) {
         if (ui.dirty & D_HEAD) draw_head("EDT");
         if (ui.dirty & (D_RULER | D_LANES)) draw_edt();
@@ -2223,7 +2274,7 @@ static void app_step(void)
     } else {
         if (ui.dirty & D_HEAD) draw_head("ARR");
         if (ui.dirty & D_RULER) draw_ruler();
-        if (ui.dirty & D_LANES) for (k = 0; k < SONG_TRACKS; k++) draw_lane(k, pos);
+        if (ui.dirty & D_LANES) { for (k = 0; k < SONG_TRACKS; k++) draw_lane(k, pos); draw_lanes_end(); }
         else if (ui.dirty & D_PH) {             /* only the playhead moved: the column it moves in */
             int32_t x0 = xstep(ui.vtarget) - 1, w = BW + 4;
             if (!ui.scrolling || pos == ~0u || pos / STEPS_PER_BAR * STEPS_PER_BAR != ui.vtarget)

@@ -134,7 +134,7 @@ firmware/src/platform.c   the FM-1 platform (boot, USB, updates, audio, panel, s
 web/                      the simulator's sources: the browser platform, the page, the audio worklet
 sim/                      the simulator, built
 tests/                    the model's tests and the host run
-tools/                    the build, the installer, the font generator
+tools/                    the build, the installer, the font and sprite generators
 ```
 
 The song model in short: `cell[bar][track]` starts a riff (1..32) or is empty; a riff plays on through its length
@@ -149,7 +149,7 @@ The chip has no FPU: everything is integer arithmetic (see `docs/RULES.md`, and 
 - [Felucca](https://github.com/hugelton/Felucca) by Leo Kuroshita (Hügelton Instruments): the FM-1 platform, and the
   browser simulator's design; [SLOOP](https://github.com/isod89/sloop-fm1) by isod89: the platform as it carries it
 - [X0X](https://github.com/charlesvestal/fm1-x0x) by charlesvestal: the first browser build of the family
-- Inter Tight (The Inter Project Authors, SIL OFL 1.1): the UI font
+- Unbounded (The Unbounded Project Authors, SIL OFL 1.1): the UI font
 - Music 2000 (Jester Interactive / Codemasters, 1999) for the idea. FM2K uses none of its code, graphics or sounds.
 
 ## License
