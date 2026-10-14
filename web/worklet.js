@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// FM2000 in an AudioWorklet: fm2000.wasm is the whole firmware against a simulated FM-1 (web/platform_web.c).
+// FM2K in an AudioWorklet: fm2k.wasm is the whole firmware against a simulated FM-1 (web/platform_web.c).
 // Each render quantum asks it for 128 frames, which runs the device's clock forward; between quanta the page's
 // input goes in and, about 30 times a second, the screen, the lights and the settings go out.
 // After the browser builds of X0X (charlesvestal/fm1-x0x) and Felucca (hugelton/Felucca, web/emu), GPL-3.0.
@@ -15,7 +15,7 @@ function storeSectors(nor) {
   return out;
 }
 
-class FM2000 extends AudioWorkletProcessor {
+class FM2K extends AudioWorkletProcessor {
   constructor() {
     super();
     this.ex = null;
@@ -105,4 +105,4 @@ class FM2000 extends AudioWorkletProcessor {
     return true;
   }
 }
-registerProcessor("fm2000", FM2000);
+registerProcessor("fm2k", FM2K);

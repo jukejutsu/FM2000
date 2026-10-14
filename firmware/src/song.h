@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* FM2000's song: the data model, nothing else (no screen, no sound, no flash). Plain C, integers only, so the
+/* FM2K's song: the data model, nothing else (no screen, no sound, no flash). Plain C, integers only, so the
  * same file runs on the FM-1, in tests/test_song.c and in the browser.
  *
  * The idea, after Music 2000: every track has its own pool of riffs (short phrases, 1..64 steps of 1/16), and the
@@ -17,8 +17,8 @@
  * triplets and 1/32 fit: SONG_TPS ticks a step, 96 a bar); notes put in by hand start on a step (tick 0). The pool is shared: one long busy riff and many short ones fit the same space.
  *
  * Sizes: 4 tracks x 32 riffs, 128 bars, 4096 notes: about 18.5 KB in RAM, a few KB packed (song_pack). */
-#ifndef FM2000_SONG_H
-#define FM2000_SONG_H
+#ifndef FM2K_SONG_H
+#define FM2K_SONG_H
 #include <stdint.h>
 
 #define SONG_TRACKS 4u

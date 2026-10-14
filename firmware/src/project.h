@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* FM2000's projects in the flash: 8 slots and an autosave, each a fixed 24 KiB area of the store (the platform's
+/* FM2K's projects in the flash: 8 slots and an autosave, each a fixed 24 KiB area of the store (the platform's
  * store_read / store_erase / store_write, offsets from 0):
  *
  *   slot 0           AUTO: written by itself when the music is stopped and nothing has been touched for a while
@@ -11,8 +11,8 @@
  *
  * Each save takes the next generation number (gen); at power-on the newest save is opened, the autosave only
  * when nothing was saved by hand after it. */
-#ifndef FM2000_PROJECT_H
-#define FM2000_PROJECT_H
+#ifndef FM2K_PROJECT_H
+#define FM2K_PROJECT_H
 #include "song.h"
 
 #define PRJ_SLOTS 9u                            /* 0 = AUTO, 1..8 */

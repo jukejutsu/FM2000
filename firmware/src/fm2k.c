@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* FM2000: a Music 2000-style song maker for the M-VAVE FM-1. Four tracks, a pool of riffs per track, and the
+/* FM2K: a Music 2000-style song maker for the M-VAVE FM-1. Four tracks, a pool of riffs per track, and the
  * song as a timeline of bars you place riffs onto, left to right.
  *
  * The prototype: the song model (song.h), a test song, a simple synth and the ARRANGE screen.
@@ -26,7 +26,7 @@
  *
  * Integers only: the chip has no FPU and no libgcc (docs/RULES.md). platform.c gives the panel, the screen, the
  * sound and MIDI (docs/API.md); tests/host.c and web/ run this same file on a computer. */
-#define APP_NAME "FM2000"
+#define APP_NAME "FM2K"
 #include "platform.c"
 #include "song.h"
 #include "project.h"

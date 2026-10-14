@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // The simulator without a browser: node web/test_sim.mjs [out-prefix]
-// Loads sim/fm2000.wasm, plays a few seconds with the panel driven as the page would, and writes the screen
+// Loads sim/fm2k.wasm, plays a few seconds with the panel driven as the page would, and writes the screen
 // (PPM, at the times SHOTS asks) and the sound (WAV). Fails on a dead screen or silence.
 import { readFileSync, writeFileSync } from "node:fs";
 
 const out = process.argv[2] || "build/sim/sim";
-const { instance } = await WebAssembly.instantiate(readFileSync(new URL("../sim/fm2000.wasm", import.meta.url)), {});
+const { instance } = await WebAssembly.instantiate(readFileSync(new URL("../sim/fm2k.wasm", import.meta.url)), {});
 const ex = instance.exports;
 const BTN = { PLAY: 12, OCT_UP: 1 }, ENC = { SELECT: 0, ALGORITHM: 1, PRESETS: 6, KNOB1: 2 };
 const RATE = ex.web_sample_rate(), Q = 128;

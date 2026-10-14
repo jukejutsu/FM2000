@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* The FM-1 in a browser: what tests/host.c is for a script, this is for a page. platform.c includes it instead
- * of the hardware when FM2000_WEB is set; the app (firmware/src/fm2000.c) runs unchanged on it, compiled to
+ * of the hardware when FM2K_WEB is set; the app (firmware/src/fm2k.c) runs unchanged on it, compiled to
  * WebAssembly (web/build.sh) and driven by an AudioWorklet (web/worklet.js):
  *
  *   - time: the page asks for audio, web_render(n) runs the app's main loop once per millisecond of it
@@ -16,7 +16,7 @@
 #define WEB_EXPORT(name) __attribute__((export_name(#name)))
 
 #ifndef APP_NAME
-#define APP_NAME "FM2000"
+#define APP_NAME "FM2K"
 #endif
 #ifndef APP_VER
 #define APP_VER "web"

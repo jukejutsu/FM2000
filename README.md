@@ -1,16 +1,16 @@
-# FM2000
+# FM2K
 
 **A song maker for the M-VAVE FM-1, after Music 2000 on the PlayStation.** Write short riffs, place them on a
 timeline of bars, build a whole track on the device: arrangement first, the way a DAW works, not a pattern
 looper.
 
-> 🚧 **Work in progress.** FM2000 is an early prototype. It runs in the browser simulator and on a computer; it has
+> 🚧 **Work in progress.** FM2K is an early prototype. It runs in the browser simulator and on a computer; it has
 > not been built or tried on an FM-1 yet. Things change daily, saved songs are not kept yet, and there is no release.
 > Do not install it on your FM-1 for now.
 
 ## The idea
 
-Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2000 is for writing a song from start to end.
+Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2K is for writing a song from start to end.
 
 - **Four tracks:** three synth tracks, each with its own sound engine, and a drum track.
 - **Riffs:** each track has a pool of up to 32 riffs, 1 to 64 steps long (a 1/16 step, up to 4 bars), with chords
@@ -129,7 +129,7 @@ After changing the code, rebuild it with `sh web/build.sh` (needs clang with the
 
 ```
 firmware/src/song.h       the song model: tracks, riffs, notes, the arrangement, pack / unpack
-firmware/src/fm2000.c     the app: the ARR screen, the sequencer, the synth
+firmware/src/fm2k.c     the app: the ARR screen, the sequencer, the synth
 firmware/src/platform.c   the FM-1 platform (boot, USB, updates, audio, panel, screen, settings), from Dinghy
 web/                      the simulator's sources: the browser platform, the page, the audio worklet
 sim/                      the simulator, built
@@ -150,10 +150,10 @@ The chip has no FPU: everything is integer arithmetic (see `docs/RULES.md`, and 
   browser simulator's design; [SLOOP](https://github.com/isod89/sloop-fm1) by isod89: the platform as it carries it
 - [X0X](https://github.com/charlesvestal/fm1-x0x) by charlesvestal: the first browser build of the family
 - Inter Tight (The Inter Project Authors, SIL OFL 1.1): the UI font
-- Music 2000 (Jester Interactive / Codemasters, 1999) for the idea. FM2000 uses none of its code, graphics or sounds.
+- Music 2000 (Jester Interactive / Codemasters, 1999) for the idea. FM2K uses none of its code, graphics or sounds.
 
 ## License
 
 GPL-3.0-only, as Felucca, SLOOP and Dinghy. Details and third-party parts in [LICENSING.md](LICENSING.md).
 
-M-VAVE and FM-1 are trademarks of their respective owners. FM2000 is not affiliated with or endorsed by them.
+M-VAVE and FM-1 are trademarks of their respective owners. FM2K is not affiliated with or endorsed by them.

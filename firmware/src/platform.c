@@ -23,7 +23,7 @@ enum { BTN_OCT_DOWN = 0, BTN_OCT_UP = 1, BTN_FX = 2, BTN_SEL = 3, BTN_ENV = 4, B
 enum { ENC_SELECT = 0, ENC_ALGORITHM = 1, ENC_KNOB1 = 2, ENC_KNOB2 = 3, ENC_KNOB3 = 4, ENC_KNOB4 = 5, ENC_PRESETS = 6 };
 #define KEY_LED(k) (14u + (k))
 
-#if defined(FM2000_WEB)
+#if defined(FM2K_WEB)
 #include "../../web/platform_web.c"            /* in a browser: the simulator (web/) */
 #elif defined(DINGHY_HOST)
 #include "../../tests/host.c"                  /* on a computer: a fake FM-1 (tests/host.c) */
@@ -70,7 +70,7 @@ static volatile uint32_t fm1_ms;                /* milliseconds since power-on (
 
 /* ---- flash: read anywhere; erase / program only the update's staging area, the settings sector and the store */
 #define SETTINGS_AT 0x000FC000u                 /* one 4 KiB sector of Felucca's globals area */
-#define STORE_AT 0x00097000u                    /* the app's store: FM2000's projects, 216 KiB (Felucca's data area) */
+#define STORE_AT 0x00097000u                    /* the app's store: FM2K's projects, 216 KiB (Felucca's data area) */
 #define STORE_LEN 0x00036000u
 #define FL_RANGE_OK(off, n) (FL_IN(off, n, FL_OTA_LO, FL_OTA_HI) || FL_IN(off, n, SETTINGS_AT, SETTINGS_AT + 0x1000u) || \
                              FL_IN(off, n, STORE_AT, STORE_AT + STORE_LEN))

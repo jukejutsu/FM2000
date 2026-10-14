@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-only
-# The simulator: firmware/src/fm2000.c compiled to WebAssembly with the browser's platform (web/platform_web.c),
+# The simulator: firmware/src/fm2k.c compiled to WebAssembly with the browser's platform (web/platform_web.c),
 # and the page, into sim/ (open it with web/serve.sh, or publish sim/ with GitHub Pages).
 # Needs clang with the wasm32 target and wasm-ld: on macOS `brew install llvm lld` (Apple's clang has neither);
 # on Linux the distribution's clang and lld. CLANG points elsewhere.
@@ -15,8 +15,8 @@ fi
 PATH="$(dirname "$CLANG"):/opt/homebrew/opt/lld/bin:/usr/local/opt/lld/bin:$PATH"
 mkdir -p sim
 "$CLANG" --target=wasm32 -O2 -ffreestanding -nostdlib -fno-builtin-memset -Wall -Wno-unused-function \
-    -DFM2000_WEB -DAPP_VER="\"${APP_VER:-web}\"" -Ifirmware/src -Ifirmware/gen \
+    -DFM2K_WEB -DAPP_VER="\"${APP_VER:-web}\"" -Ifirmware/src -Ifirmware/gen \
     -Wl,--no-entry -Wl,-z,stack-size=262144 -Wl,--initial-memory=4194304 \
-    -o sim/fm2000.wasm firmware/src/fm2000.c
+    -o sim/fm2k.wasm firmware/src/fm2k.c
 cp web/index.html web/worklet.js sim/
-echo "web: sim/ ($(wc -c < sim/fm2000.wasm | tr -d ' ') B wasm)"
+echo "web: sim/ ($(wc -c < sim/fm2k.wasm | tr -d ' ') B wasm)"
