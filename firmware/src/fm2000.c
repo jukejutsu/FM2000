@@ -34,7 +34,7 @@
 #define RING_PUBLISH() __asm__ volatile("" ::: "memory")   /* (tests/host.c has none) */
 #endif
 
-static song_t song;
+static song_t song __attribute__((section(".pool")));   /* (18 KB: in the pool, not the 96 KB of RAM) */
 
 /* ================================================================== the sounds */
 enum { K_SQUARE, K_PULSE, K_SAW, K_TRI, K_KICK, K_SNARE, K_CLAP, K_HAT, K_OPENHAT, K_TOM };
@@ -96,7 +96,7 @@ static const preset_t *preset_of(uint32_t t)
 typedef struct {
     uint32_t ph, inc, age;
     int32_t amp, peak, lp, hp;                  /* Q15 */
-    uint16_t left;                              /* steps until the sequencer lets go; HELD = a key */
+    uint16_t left;                              /* ticks until the sequencer lets go; HELD = a key */
     uint8_t on, trk, note, kind, stage;         /* stage 0 attack, 1 decay / sustain */
 } voice_t;
 static voice_t voice[NVOICE];
@@ -128,7 +128,7 @@ static uint32_t drum_kind(uint32_t n)           /* General MIDI where it has one
     }
 }
 
-static void voice_on(uint32_t trk, uint32_t note, uint32_t vel, uint32_t steps)
+static void voice_on(uint32_t trk, uint32_t note, uint32_t vel, uint32_t ticks)
 {
     uint32_t v, pick = 0, best = 0xFFFFFFFFu, kind;
     voice_t *p;
@@ -143,7 +143,7 @@ static void voice_on(uint32_t trk, uint32_t note, uint32_t vel, uint32_t steps)
     p->note = (uint8_t)note;
     p->kind = (uint8_t)kind;
     p->age = ++ages;
-    p->left = (uint16_t)steps;
+    p->left = (uint16_t)ticks;
     p->peak = (int32_t)(vel * 64u);             /* 127 -> 8128 */
     p->stage = 0;
     p->lp = p->hp = 0;
@@ -183,23 +183,43 @@ static void ask(uint32_t what, uint32_t trk, uint32_t note, uint32_t vel)
     q_w++;
 }
 
-/* the sequencer: an absolute step (bar * 16 + step) and the phase into it (2^32 = one step) */
-static volatile uint32_t seq_play, seq_from, seq_step, seq_bars, seq_click;
+/* the sequencer: an absolute step (bar * 16 + step), the tick in it (0..5) and the phase into the tick (2^32 = one
+ * tick). It plays the song, or (seq_riff, recording) one riff over and over from its start. */
+static volatile uint32_t seq_play, seq_from, seq_step, seq_sub, seq_bars, seq_click;
+static volatile uint32_t seq_ticks;             /* ticks since it started (for a recorded note's length) */
+static volatile uint32_t seq_riff, seq_rtrk;    /* 0: the song; else this riff of track seq_rtrk, looping */
+static volatile uint32_t seq_restart;           /* start again from the top (the main loop asks) */
+static volatile uint32_t seq_busy, seq_late;    /* the main loop is moving notes: a tick waits for it */
 static uint32_t seq_ph, seq_was;
 static uint32_t click_ph, click_inc;            /* the metronome: a short blip on each beat, higher on the bar */
 static int32_t click_amp;
 #define STEP_K_Q8 166214u                       /* 2^32 steps x 4 per beat / (600 x 44100) per frame per 0.1 BPM, x 256 */
 
-static void seq_note(void *ctx, uint32_t trk, const song_ev_t *e) { (void)ctx; voice_on(trk, e->note, e->vel, e->len); }
+/* recording: the notes not to play from the riff: those held on the keys now (they sound already), and those just
+ * put a little ahead of the playhead (quantised forward: heard when played, not again a moment later) */
+static volatile uint32_t rec_mute[4];           /* 128 notes, a bit each */
+static volatile uint16_t rec_skip[8];           /* (tick in the riff << 7 | note) + 1; 0 = free */
+static void seq_note(void *ctx, uint32_t trk, const song_ev_t *e)
+{
+    (void)ctx;
+    if (seq_riff && trk == seq_rtrk) {
+        uint32_t k, key = ((e->start * SONG_TPS + e->tick) << 7 | e->note) + 1u;
+        if (rec_mute[e->note >> 5] >> (e->note & 31u) & 1u) return;
+        for (k = 0; k < 8u; k++) if (rec_skip[k] == key) { rec_skip[k] = 0; return; }
+    }
+    voice_on(trk, e->note, e->vel, e->len * SONG_TPS);
+}
 static void seq_tick(void)
 {
     uint32_t v, t;
+    if (seq_busy) { seq_late = 1; return; }     /* (the notes are moving: in a moment) */
+    seq_late = 0;
     for (v = 0; v < NVOICE; v++)
         if (voice[v].on && voice[v].left != HELD && voice[v].left && --voice[v].left == 0)
             voice[v].on = 0;
-    for (t = 0; t < SONG_TRACKS; t++)
-        song_notes_at(&song, t, seq_step, seq_note, 0);
-    if (seq_click && !(seq_step & 3u)) {
+    if (seq_riff) riff_notes_at(&song, seq_rtrk, seq_riff, seq_step, seq_sub, seq_note, 0);
+    else for (t = 0; t < SONG_TRACKS; t++) song_notes_at_tick(&song, t, seq_step, seq_sub, seq_note, 0);
+    if (seq_click && !seq_sub && !(seq_step & 3u)) {
         click_inc = (seq_step & 15u) ? 2000u * HZ_INC : 3000u * HZ_INC;
         click_amp = (seq_step & 15u) ? 5000 : 7000;
         click_ph = 0;
@@ -281,23 +301,35 @@ static void app_audio(int32_t *out, uint32_t n)
         else for (k = 0; k < NVOICE; k++) voice[k].on = 0;
         q_r++;
     }
+    if (seq_restart) { seq_restart = 0; seq_was = 0; }
     for (i = 0; i < n; i++) {
         if (seq_play != seq_was) {
             seq_was = seq_play;
-            if (seq_play) { seq_step = seq_from * STEPS_PER_BAR; seq_ph = 0; seq_tick(); }
-            else for (k = 0; k < NVOICE; k++) if (voice[k].left != HELD) voice[k].on = 0;
+            if (seq_play) {
+                seq_step = seq_riff ? 0u : seq_from * STEPS_PER_BAR;
+                seq_sub = 0; seq_ph = 0; seq_ticks = 0;
+                for (k = 0; k < NVOICE; k++) if (voice[k].left != HELD) voice[k].on = 0;
+                seq_tick();
+            } else for (k = 0; k < NVOICE; k++) if (voice[k].left != HELD) voice[k].on = 0;
         } else if (seq_play) {
             uint32_t p = seq_ph;
-            seq_ph += (song.bpm10 * STEP_K_Q8) >> 8;
+            seq_ph += ((song.bpm10 * STEP_K_Q8) >> 8) * SONG_TPS;
             if (seq_ph < p) {
-                uint32_t st = seq_step + 1u, end = seq_bars * STEPS_PER_BAR;
-                if (song.loop_end > song.loop_start && st >= song.loop_end * STEPS_PER_BAR)
-                    st = song.loop_start * STEPS_PER_BAR;
-                else if (st >= end)
-                    st = 0;
-                seq_step = st;
+                seq_ticks++;
+                if (++seq_sub >= SONG_TPS) {
+                    uint32_t st = seq_step + 1u, end = seq_bars * STEPS_PER_BAR;
+                    seq_sub = 0;
+                    if (seq_riff) {             /* one riff: round and round */
+                        if (st >= song.riff[seq_rtrk][seq_riff - 1u].steps) st = 0;
+                    } else if (song.loop_end > song.loop_start && st >= song.loop_end * STEPS_PER_BAR)
+                        st = song.loop_start * STEPS_PER_BAR;
+                    else if (st >= end)
+                        st = 0;
+                    seq_step = st;
+                }
                 seq_tick();
-            }
+            } else if (seq_late && !seq_busy)
+                seq_tick();                     /* the tick that waited */
         }
         if (click_amp) {
             out[2u * i] += (sine_ish(click_ph) * click_amp) >> 15;
@@ -464,6 +496,20 @@ static struct {
     uint32_t dirty;
 } ui;
 enum { D_HEAD = 1, D_RULER = 2, D_LANES = 4, D_FOOT = 8, D_ALL = 15, D_PH = 16, D_LABEL = 32 };
+
+/* recording a riff (REC on RIF): REC records over the riff as it loops; REC again: REHEARSAL (it loops, the keys
+ * play, nothing is written; REC blinks), REC again: recording. PLAY or leaving RIF stops it. */
+enum { REC_OFF, REC_ON, REC_REHEARSE };
+#define REC_HOLDS 16u
+static struct {
+    uint32_t state, lit;                        /* lit: REC's light as last drawn */
+    struct { uint8_t on, start, tick, note; uint32_t t0; } hold[REC_HOLDS];   /* notes being recorded, held */
+} rec;
+static const char *const QUANT_NAME[RIFF_QUANTS] = {"1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32"};
+static uint32_t rec_lit(void)                   /* REC's light: on recording, blinking in rehearsal, else armed */
+{
+    return rec.state == REC_ON ? 1u : rec.state == REC_REHEARSE ? (fm1_ms / 250u & 1u) == 0u : ui.rec != 0;
+}
 /* D_PH: the playhead alone; D_LABEL: the chosen track's name, scrolling */
 
 /* a page sliding on by a bar: from -> to in a few eased frames */
@@ -589,7 +635,7 @@ static void draw_head(const char *screen)
     chrome_bar(HEAD_H);
     cv_text_on(8, 1, &FONT_M, screen, C_TXT, C_CHROME);
     cv_icon(x, 5, ICON_PLAY, seq_play ? C_PLAY : C_CHROME_OFF);
-    cv_icon(x + 19, 5, ICON_REC, ui.rec ? C_RED : C_CHROME_OFF);
+    cv_icon(x + 19, 5, ICON_REC, rec_lit() ? C_RED : C_CHROME_OFF);
     cv_icon(x + 38, 5, ICON_LOOP, song.loop_end > song.loop_start ? C_ACC : C_CHROME_OFF);
     cv_icon(x + 57, 5, ICON_METRO, seq_click ? C_ACC : C_CHROME_OFF);
     v = bpm[0] == '0' ? bpm + 1 : bpm;          /* the tempo, right, in a dark display as on Music 2000 */
@@ -1150,7 +1196,9 @@ static void prj_input(int32_t d, uint32_t b)
  *   SELECT / ALGORITHM   the cursor: the step / the note (as on ARR)
  *   OCT+ / OCT-          a note in at the cursor (1 step) / the note under the cursor out
  *   KNOB 1 / 2 / 3       the note under the cursor: along the steps / up and down / its length
- *   KNOB 4               zoom, as on ARR: 8 / 16 / 32 / 64 steps in view */
+ *   KNOB 4               zoom, as on ARR: 8 / 16 / 32 / 64 steps in view
+ *   REC                  record: the riff loops alone, the keys write onto its quantise grid (EDT); REC again:
+ *                        rehearsal (REC blinks, nothing written), again: recording. PLAY or another screen: stop */
 #define RIF_KW 34                               /* the keyboard column */
 #define RIF_SW ((int32_t)(24 >> rif.zoom))      /* a step's width: 24 12 6 3 px at 2x 1x 0.5x 0.25x */
 #define RIF_STEPS (8u << rif.zoom)              /* steps in view: 8 16 32 64 */
@@ -1309,21 +1357,22 @@ static void draw_rif_rows(uint32_t r0, uint32_t nr, uint32_t pos)   /* rows r0 .
                                                     (int32_t)(nr * RIF_RH), RGB(6, 9, 34));
     }
     /* the notes */
-    for (i = f->first; i < (uint32_t)f->first + f->count; i++) {
+    for (i = f->first; i < (uint32_t)f->first + f->count; i++) {   /* (in ticks: a recorded note may sit between steps) */
         const song_ev_t *e = &song.ev[i];
-        uint32_t s0 = e->start, s1 = (uint32_t)e->start + e->len, row_ = rif.top - e->note;
+        uint32_t a = e->start * SONG_TPS + e->tick, t0 = a, t1 = a + e->len * SONG_TPS, row_ = rif.top - e->note;
+        uint32_t vl = rif.left * SONG_TPS, vr = (rif.left + RIF_STEPS) * SONG_TPS;
         int32_t x0, x1, y;
         if (e->note > rif.top || row_ < r0 || row_ >= r0 + nr) continue;
-        if (s1 > f->steps) s1 = f->steps;
-        if (s1 <= rif.left || s0 >= rif.left + RIF_STEPS) continue;
-        if (s0 < rif.left) s0 = rif.left;
-        if (s1 > rif.left + RIF_STEPS) s1 = rif.left + RIF_STEPS;
-        x0 = RIF_KW + 1 + (int32_t)((s0 - rif.left) * (uint32_t)RIF_SW);
-        x1 = RIF_KW + (int32_t)((s1 - rif.left) * (uint32_t)RIF_SW) - (RIF_SW > 3 ? 1 : 0);
+        if (t1 > f->steps * SONG_TPS) t1 = f->steps * SONG_TPS;
+        if (t1 <= vl || t0 >= vr) continue;
+        if (t0 < vl) t0 = vl;
+        if (t1 > vr) t1 = vr;
+        x0 = RIF_KW + 1 + (int32_t)((t0 - vl) * (uint32_t)RIF_SW / SONG_TPS);
+        x1 = RIF_KW + (int32_t)((t1 - vl) * (uint32_t)RIF_SW / SONG_TPS) - (RIF_SW > 3 ? 1 : 0);
         if (x1 <= x0) x1 = x0 + 1;
         y = (int32_t)((row_ - r0) * RIF_RH) + 1;
         blk_bg = rif_row_bg(e->note);
-        riff_block(x0, y, x1 - x0, RIF_RH - 2, s0 != e->start, 0,
+        riff_block(x0, y, x1 - x0, RIF_RH - 2, t0 != a, 0,
                    e->note == rif.note && rif.step >= e->start && rif.step < (uint32_t)e->start + e->len ? C_BLOCK_SEL : C_BLOCK);
     }
     /* the cursor, and the playhead when the opened copy plays */
@@ -1333,7 +1382,8 @@ static void draw_rif_rows(uint32_t r0, uint32_t nr, uint32_t pos)   /* rows r0 .
         cv_rect(x, y, 1, RIF_RH, C_TXT); cv_rect(x + RIF_SW, y, 1, RIF_RH, C_TXT);
     }
     if (pos != ~0u && pos >= rif.left && pos < rif.left + RIF_STEPS)
-        cv_rect(RIF_KW + (int32_t)((pos - rif.left) * (uint32_t)RIF_SW), 0, 2, (int32_t)(nr * RIF_RH), C_PLAY);
+        cv_rect(RIF_KW + (int32_t)((pos - rif.left) * (uint32_t)RIF_SW), 0, 2, (int32_t)(nr * RIF_RH),
+                rec.state == REC_ON ? C_RED : C_PLAY);   /* red while recording */
     /* the roll is one card: its top corners on the first strip, its bottom ones on the last */
     if (r0 == 0) card_corners(0, 0, 240, 1000, C_KEY_WHITE, C_BG, 1, 0), card_corners(0, 0, 240, 1000, rif_row_bg(rif.top), C_BG, 0, 1);
     if (r0 + nr >= RIF_ROWS) {
@@ -1352,6 +1402,10 @@ static void draw_rif_foot(void)
     chrome_bar(20);
     if (ui.msg_until && (int32_t)(ui.msg_until - fm1_ms) > 0) {
         cv_text_on(8, 2, &FONT_S, ui.msg, C_TXT, C_CHROME);
+    } else if (rec.state) {                     /* recording: what, and on which grid */
+        n = copy_str(s, rec.state == REC_ON ? "REC  Q " : "REHEARSAL  Q ", 16);
+        copy_str(s + n, QUANT_NAME[f->quant], 7);
+        cv_text_on(8, 2, &FONT_S, s, rec.state == REC_ON ? RGB(150, 10, 0) : C_CHROME_INK, C_CHROME);
     } else {
         s[0] = 'R'; put_num(s + 1, rif.r, 2); s[3] = ' ';
         n = 4u + copy_str(s + 4, f->name, RIFF_NAME);
@@ -1376,6 +1430,7 @@ static uint32_t rif_pos(void)                   /* the playhead's step in the op
 {
     uint32_t st;
     if (!seq_play) return ~0u;
+    if (seq_riff) return seq_riff == rif.r && seq_rtrk == rif.trk ? seq_step : ~0u;   /* (the riff alone, recording) */
     st = seq_step;
     if (st < rif.at * STEPS_PER_BAR) return ~0u;
     st -= rif.at * STEPS_PER_BAR;
@@ -1395,11 +1450,12 @@ static void draw_rif(void)
 /* Tabs (SELECT): RIFF, and NOTE when the cursor is on a note. ALGORITHM picks a row, KNOB 1 changes its value.
  * EDIT goes back to the roll, HOME to ARR.
  *   RIFF   LENGTH     1..64 steps (notes past a shorter end go, notes running past it are cut)
+ *          QUANTIZE   the grid recording puts notes on: 1/2 1/4 1/4T 1/8 1/8T 1/16 1/16T 1/32 (T: triplets)
  *   NOTE   VELOCITY   1..127 (sounded as it changes) */
 enum { TAB_RIFF, TAB_NOTE };
 static struct { uint32_t tab, row; } edt;
 static const char *const EDT_TAB[2] = {"RIFF", "NOTE"};
-static const uint32_t EDT_ROWS[2] = {1, 1};
+static const uint32_t EDT_ROWS[2] = {2, 1};
 #define EDT_ROW_Y 44
 #define EDT_ROW_H 24
 
@@ -1454,8 +1510,9 @@ static void draw_edt(void)
     cv_blit(0, 46);
     /* each setting a card: its name small, its value large in the accent, a bar of it along the bottom */
     for (r = 0; r < EDT_ROWS[edt.tab]; r++) {
-        static const char *const NAME[2][1] = {{"LENGTH"}, {"VELOCITY"}};
-        static const char *const UNIT[2][1] = {{"STEPS"}, {""}};
+        static const char *const NAME[2][2] = {{"LENGTH", "QUANTIZE"}, {"VELOCITY", ""}};
+        static const char *const UNIT[2][2] = {{"STEPS", ""}, {"", ""}};
+        const char *unit = UNIT[edt.tab][r];
         const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
         uint32_t sel = r == edt.row, v = 0, vmax = 1, k;
         uint16_t bg = sel ? C_PANEL_HI : C_PANEL;
@@ -1463,13 +1520,25 @@ static void draw_edt(void)
         cv_begin(240, 64, C_BG);
         card(6, 0, 228, 64, bg, C_BG);
         cv_text_on(16, 3, &FONT_S, NAME[edt.tab][r], sel ? C_TXT : C_MID, bg);
-        if (edt.tab == TAB_RIFF) { v = f->steps; vmax = RIFF_MAX_STEPS; }
-        else if (has_note) { v = song.ev[rif_note_here()].vel; vmax = 127; }
-        if (edt.tab == TAB_NOTE && !has_note) copy_str(s, "-", 2);
-        else { k = put_dec(s, v); s[k] = 0; }
+        if (edt.tab == TAB_RIFF && r == 1u) {   /* the grid: "1/8" and TRIPLET */
+            const char *q = QUANT_NAME[f->quant];
+            for (k = 0; q[k] && q[k] != 'T'; k++) s[k] = q[k];
+            s[k] = 0;
+            if (q[k] == 'T') unit = "TRIPLET";
+        } else {
+            if (edt.tab == TAB_RIFF) { v = f->steps; vmax = RIFF_MAX_STEPS; }
+            else if (has_note) { v = song.ev[rif_note_here()].vel; vmax = 127; }
+            if (edt.tab == TAB_NOTE && !has_note) copy_str(s, "-", 2);
+            else { k = put_dec(s, v); s[k] = 0; }
+        }
         x = cv_text_on(16, 19, &FONT_L, s, C_ACC, bg);
-        cv_text_on(x + 6, 32, &FONT_S, UNIT[edt.tab][r], C_MID, bg);
-        if (edt.tab == TAB_RIFF) {              /* the steps, a cell each, the riff's lit, a gap every bar */
+        cv_text_on(x + 6, 32, &FONT_S, unit, C_MID, bg);
+        if (edt.tab == TAB_RIFF && r == 1u) {   /* a bar, a mark on each place of the grid, the beats lit */
+            uint32_t g = RIFF_Q_TICKS[f->quant];
+            cv_rect(16, 56, 208, 1, C_LOW);
+            for (k = 0; k < STEPS_PER_BAR * SONG_TPS; k += g)
+                cv_rect(16 + (int32_t)(k * 208u / (STEPS_PER_BAR * SONG_TPS)), 52, 2, 7, k % 24u ? C_BLOCK : C_ACC);
+        } else if (edt.tab == TAB_RIFF) {       /* the steps, a cell each, the riff's lit, a gap every bar */
             for (k = 0; k < RIFF_MAX_STEPS; k++)
                 cv_rect(16 + (int32_t)(k * 3u) + (int32_t)(k / 16u) * 2, 54, 2, 4,
                         k < v ? (k % 4u ? C_BLOCK : C_ACC) : C_LOW);
@@ -1503,10 +1572,16 @@ static void edt_input(int32_t dsel, int32_t dalg, int32_t dk1)
         ui.dirty |= D_LANES;
     }
     if (dk1) {
-        if (edt.tab == TAB_RIFF) {              /* the riff's length */
+        if (edt.tab == TAB_RIFF && edt.row == 1u) {   /* the quantise */
+            song_riff_t *fq = &song.riff[rif.trk][rif.r - 1u];
+            uint32_t q = (uint32_t)clamp((int32_t)fq->quant + dk1, 0, (int32_t)RIFF_QUANTS - 1);
+            if (q != fq->quant) { fq->quant = (uint8_t)q; edited(); }
+        } else if (edt.tab == TAB_RIFF) {       /* the riff's length */
             uint32_t st = (uint32_t)clamp((int32_t)f->steps + dk1, 1, (int32_t)RIFF_MAX_STEPS);
             if (st != f->steps) {
+                seq_busy = 1;
                 riff_set_steps(&song, rif.trk, rif.r, st);
+                seq_busy = 0;
                 if (rif.step >= st) rif.step = st - 1u;
                 if (rif.left >= st) rif.left = 0;
                 seq_bars = song_bars(&song);
@@ -1586,6 +1661,98 @@ static void seq_button(uint32_t b, uint32_t rel)
         if (hold_seq.state == 2) { splash.on = 0; ui.dirty = D_ALL; }   /* let go too soon: kept */
         hold_seq.state = 0;
     }
+}
+
+/* ================================================================== recording (REC on RIF) */
+/* The riff loops alone from its start; a key pressed while recording puts its note on the riff's quantise grid
+ * (the nearest place), at once; letting go sets its length (in steps, at least 1). Round again, notes go on over
+ * what is there: the same note at the same place is replaced, an earlier one of the same pitch running into it is
+ * cut where it starts. */
+static uint32_t rec_fine(void)                  /* where the playhead is, in 1/256 ticks of the riff */
+{
+    uint32_t st = seq_step, sub = seq_sub, ph = seq_ph;
+    return ((st * SONG_TPS + sub) << 8) + (ph >> 24);
+}
+static void rec_mute_set(uint32_t note, uint32_t on)
+{
+    if (on) rec_mute[note >> 5] |= 1u << (note & 31u);
+    else rec_mute[note >> 5] &= ~(1u << (note & 31u));
+}
+static void rec_down(uint32_t note, uint32_t vel)
+{
+    song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
+    uint32_t g = RIFF_Q_TICKS[f->quant], len = f->steps * SONG_TPS, fine = rec_fine(), q, i, k;
+    int32_t ok;
+    if (rec.state != REC_ON || note > 127u) return;
+    q = (fine + g * 128u) / (g * 256u) * g;     /* the nearest place on the grid */
+    if (q >= len) q = 0;                        /* (past the end: the riff's start, next time round) */
+    seq_busy = 1;
+    for (i = f->first; i < (uint32_t)f->first + f->count; i++) {   /* the same pitch running into it: cut */
+        song_ev_t *e = &song.ev[i];
+        uint32_t a = e->start * SONG_TPS + e->tick;
+        if (e->note == note && a < q && a + e->len * SONG_TPS > q)
+            e->len = (uint8_t)((q - a) / SONG_TPS ? (q - a) / SONG_TPS : 1u);
+    }
+    ok = riff_note_put(&song, rif.trk, rif.r, q / SONG_TPS, q % SONG_TPS, 1, note, vel);
+    seq_busy = 0;
+    if (ok < 0) { say("NO ROOM"); return; }
+    rec_mute_set(note, 1);                      /* (it sounds from the key: the riff leaves it be) */
+    if ((q << 8) > fine)                        /* put ahead of the playhead: not again when it gets there */
+        for (k = 0; k < 8u; k++) if (!rec_skip[k]) { rec_skip[k] = (uint16_t)((q << 7 | note) + 1u); break; }
+    for (k = 0; k < REC_HOLDS; k++)
+        if (!rec.hold[k].on) {
+            rec.hold[k].on = 1; rec.hold[k].note = (uint8_t)note;
+            rec.hold[k].start = (uint8_t)(q / SONG_TPS); rec.hold[k].tick = (uint8_t)(q % SONG_TPS);
+            rec.hold[k].t0 = seq_ticks;
+            break;
+        }
+    edited();
+    ui.dirty |= D_LANES;
+}
+static void rec_up(uint32_t note)               /* the key let go: the note's length */
+{
+    const song_riff_t *f = &song.riff[rif.trk][rif.r - 1u];
+    uint32_t k, i, len;
+    int found;
+    if (note > 127u) return;
+    rec_mute_set(note, 0);
+    for (k = 0; k < REC_HOLDS; k++) {
+        if (!rec.hold[k].on || rec.hold[k].note != note) continue;
+        rec.hold[k].on = 0;
+        len = (seq_ticks - rec.hold[k].t0 + SONG_TPS / 2u) / SONG_TPS;
+        if (len < 1u) len = 1u;
+        if (len > f->steps) len = f->steps;
+        i = riff_find(&song, f, rec.hold[k].start, rec.hold[k].tick, note, &found);
+        if (found) song.ev[i].len = (uint8_t)len;
+        ui.dirty |= D_LANES;
+    }
+}
+static void rec_stop(void)
+{
+    uint32_t k;
+    for (k = 0; k < REC_HOLDS; k++) if (rec.hold[k].on) rec_up(rec.hold[k].note);
+    for (k = 0; k < 4u; k++) rec_mute[k] = 0;
+    for (k = 0; k < 8u; k++) rec_skip[k] = 0;
+    rec.state = REC_OFF;
+    seq_play = 0;
+    ui.dirty |= D_HEAD | D_LANES | D_FOOT;
+}
+static void rec_button(void)                    /* REC on RIF: record, then rehearsal and back */
+{
+    if (rec.state == REC_OFF) {
+        uint32_t k;
+        for (k = 0; k < 8u; k++) rec_skip[k] = 0;
+        seq_rtrk = rif.trk;
+        seq_riff = rif.r;
+        seq_restart = 1;                        /* (from the top, also when something was playing) */
+        seq_play = 1;
+        rec.state = REC_ON;
+    } else if (rec.state == REC_ON) {
+        uint32_t k;
+        for (k = 0; k < REC_HOLDS; k++) if (rec.hold[k].on) rec_up(rec.hold[k].note);
+        rec.state = REC_REHEARSE;
+    } else rec.state = REC_ON;
+    ui.dirty |= D_HEAD | D_LANES | D_FOOT;
 }
 
 static void app_init(void)
@@ -1696,11 +1863,13 @@ static void app_step(void)
                 uint32_t off = rif.step - e.start;
                 int found = 0;
                 if (ns != (int32_t)e.start) {
-                    riff_find(&song, f, (uint32_t)ns, e.note, &found);
+                    riff_find(&song, f, (uint32_t)ns, e.tick, e.note, &found);
                     if (found) say("NO ROOM");
                     else {
-                        riff_note_del(&song, rif.trk, rif.r, e.start, e.note);
-                        riff_note_set(&song, rif.trk, rif.r, (uint32_t)ns, e.len, e.note, e.vel);
+                        seq_busy = 1;
+                        riff_note_del_at(&song, rif.trk, rif.r, e.start, e.tick, e.note);
+                        riff_note_put(&song, rif.trk, rif.r, (uint32_t)ns, e.tick, e.len, e.note, e.vel);
+                        seq_busy = 0;
                         rif.step = (uint32_t)ns + off < f->steps ? (uint32_t)ns + off : (uint32_t)ns;
                         rif_follow();
                         edited();
@@ -1717,11 +1886,13 @@ static void app_step(void)
                 int32_t nn = clamp((int32_t)e.note + d, 0, 127);
                 int found = 0;
                 if (nn != (int32_t)e.note) {
-                    riff_find(&song, f, e.start, (uint32_t)nn, &found);
+                    riff_find(&song, f, e.start, e.tick, (uint32_t)nn, &found);
                     if (found) say("NO ROOM");
                     else {
-                        riff_note_del(&song, rif.trk, rif.r, e.start, e.note);
-                        riff_note_set(&song, rif.trk, rif.r, e.start, e.len, (uint32_t)nn, e.vel);
+                        seq_busy = 1;
+                        riff_note_del_at(&song, rif.trk, rif.r, e.start, e.tick, e.note);
+                        riff_note_put(&song, rif.trk, rif.r, e.start, e.tick, e.len, (uint32_t)nn, e.vel);
+                        seq_busy = 0;
                         rif.note = (uint32_t)nn;
                         rif_follow();
                         audition(rif.note);
@@ -1854,21 +2025,32 @@ static void app_step(void)
     if (ui.mode == M_RIF && b & ((1u << BTN_OCT_DOWN) | (1u << BTN_OCT_UP))) {   /* RIF: a note in / out */
         if (b & (1u << BTN_OCT_UP)) {
             if (rif_note_here() >= 0) say("A NOTE IS HERE");
-            else if (riff_note_set(&song, rif.trk, rif.r, rif.step, 1, rif.note, 100) < 0) say("NO ROOM");
-            else { audition(rif.note); edited(); }
+            else { int32_t ok; seq_busy = 1; ok = riff_note_set(&song, rif.trk, rif.r, rif.step, 1, rif.note, 100); seq_busy = 0;
+                   if (ok < 0) say("NO ROOM"); else { audition(rif.note); edited(); } }
         }
         if (b & (1u << BTN_OCT_DOWN)) {
             int32_t i = rif_note_here();
             if (i < 0) say("NO NOTE HERE");
-            else { riff_note_del(&song, rif.trk, rif.r, song.ev[i].start, song.ev[i].note); edited(); }
+            else {
+                seq_busy = 1;
+                riff_note_del_at(&song, rif.trk, rif.r, song.ev[i].start, song.ev[i].tick, song.ev[i].note);
+                seq_busy = 0;
+                edited();
+            }
         }
         b &= ~((1u << BTN_OCT_DOWN) | (1u << BTN_OCT_UP));
         ui.dirty |= D_LANES | D_FOOT;
     }
     if (rif.aud_until && (int32_t)(rif.aud_until - fm1_ms) <= 0) { ask(Q_OFF, rif.trk, rif.aud_note, 0); rif.aud_until = 0; }
-    if (b & (1u << BTN_REC)) { ui.rec = !ui.rec; ui.dirty |= D_HEAD; }
+    if (rec.state && ui.mode != M_RIF) rec_stop();   /* another screen: the recording stops */
+    if (b & (1u << BTN_REC)) {
+        if (ui.mode == M_RIF) rec_button();
+        else { ui.rec = !ui.rec; ui.dirty |= D_HEAD; }
+    }
     if (b & (1u << BTN_GLO)) { seq_click = !seq_click; ui.dirty |= D_HEAD; }   /* the metronome (for now on GLO) */
+    if (b & (1u << BTN_PLAY) && rec.state) { rec_stop(); b &= ~(1u << BTN_PLAY); }   /* PLAY / STOP: recording ends */
     if (b & (1u << BTN_PLAY)) {
+        seq_riff = 0;                           /* the song */
         if (!seq_play) {
             seq_bars = song_bars(&song);
             seq_from = ui.bar < seq_bars ? ui.bar : 0u;
@@ -1888,23 +2070,33 @@ static void app_step(void)
     if (down) prj.touched = fm1_ms;
     if (ui.mode == M_RIF && (down | up)) ui.dirty |= D_LANES;   /* the played keys light up in the roll */
     for (k = 0; k < 27u; k++) {
-        if (up >> k & 1u) { ask(Q_OFF, ui.trk, ui.held[k], 0); midi_send(0x80u | ui.trk, ui.held[k], 0); }
+        if (up >> k & 1u) {
+            ask(Q_OFF, ui.trk, ui.held[k], 0); midi_send(0x80u | ui.trk, ui.held[k], 0);
+            if (rec.state) rec_up(ui.held[k]);
+        }
         if (down >> k & 1u) {
             ui.held[k] = (uint8_t)(29u + 12u * ui.oct + k);   /* oct 2: key 0 = F3; on the drums F3 .. are GM drums 53 .. */
             if (ui.trk == SONG_DRUM_TRACK) ui.held[k] = (uint8_t)(35u + k);   /* the drums: key 0 = kick (35) */
             ask(Q_ON, ui.trk, ui.held[k], 100);
             midi_send(0x90u | ui.trk, ui.held[k], 100);
+            if (rec.state && ui.trk == rif.trk) rec_down(ui.held[k], 100);
         }
     }
     while (midi_get(&st, &d1, &d2)) {           /* MIDI in, channels 1-4 = tracks 1-4 */
         uint32_t ch = st & 15u;
         if (ch >= SONG_TRACKS) continue;
-        if ((st & 0xF0u) == 0x90u && d2) ask(Q_ON, ch, d1, d2);
-        else if ((st & 0xF0u) == 0x80u || (st & 0xF0u) == 0x90u) ask(Q_OFF, ch, d1, 0);
+        if ((st & 0xF0u) == 0x90u && d2) {
+            ask(Q_ON, ch, d1, d2);
+            if (rec.state && ch == rif.trk) rec_down(d1, d2);   /* MIDI on the riff's channel records too */
+        } else if ((st & 0xF0u) == 0x80u || (st & 0xF0u) == 0x90u) {
+            ask(Q_OFF, ch, d1, 0);
+            if (rec.state && ch == rif.trk) rec_up(d1);
+        }
     }
 
     fm1_led_key(BTN_PLAY, seq_play != 0);
-    fm1_led_key(BTN_REC, ui.rec != 0);
+    fm1_led_key(BTN_REC, rec_lit() != 0);
+    if (rec_lit() != rec.lit) { rec.lit = rec_lit(); ui.dirty |= D_HEAD; }   /* (blinking in rehearsal) */
     fm1_led_key(BTN_GLO, seq_click != 0);
     fm1_led_key(BTN_OCT_DOWN, ui.mode == M_PRJ ? prj.ask != 0 || (prj.sel != PRJ_AUTO && prj.used[prj.sel])
                               : ui.mode == M_RIF ? rif_note_here() >= 0 : ui.oct < 2u);

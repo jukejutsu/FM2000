@@ -27,7 +27,9 @@ static int consistent(const song_t *x)
                 if (e->start >= f->steps || !e->len || !e->vel) return 0;
                 if (i > f->first) {
                     const song_ev_t *p = &x->ev[i - 1u];
-                    if (p->start > e->start || (p->start == e->start && p->note >= e->note)) return 0;
+                    uint32_t pa = p->start * SONG_TPS + p->tick, ea = e->start * SONG_TPS + e->tick;
+                    if (pa > ea || (pa == ea && p->note >= e->note)) return 0;
+                    if (e->tick >= SONG_TPS) return 0;
                 }
             }
             sum += f->count;
@@ -176,6 +178,60 @@ static void test_pack(void)
     printf("  fullest song: %u B packed (max %u)\n", n, (unsigned)SONG_PACK_MAX);
 }
 
+/* notes between steps (recorded on a triplet or 1/32 grid): kept in order, found, played on their tick, saved */
+static void tn(void *ctx, uint32_t track, const song_ev_t *e) { got_t *g = ctx; (void)track; if (g->n < 16u) g->ev[g->n++] = *e; }
+static void test_ticks(void)
+{
+    uint32_t n, i, k;
+    got_t g = {0};
+    song_init(&s);
+    riff_new(&s, 0, 1, 16);
+    CHECK(s.riff[0][0].quant == RIFF_Q_16 && RIFF_Q_TICKS[RIFF_Q_16] == 6u);
+    CHECK(riff_note_put(&s, 0, 1, 2, 4, 1, 60, 100) >= 0);       /* 1/16 triplet: step 2 and 4/6 */
+    CHECK(riff_note_put(&s, 0, 1, 2, 0, 1, 64, 100) >= 0);
+    CHECK(riff_note_put(&s, 0, 1, 2, 4, 3, 60, 90) >= 0 && s.riff[0][0].count == 2);   /* the same place: replaced */
+    CHECK(riff_note_put(&s, 0, 1, 2, 6, 1, 60, 90) < 0);         /* no tick 6 */
+    CHECK(s.ev[0].note == 64 && s.ev[1].tick == 4 && s.ev[1].len == 3 && consistent(&s));
+    song_place(&s, 0, 0, 1);
+    CHECK(song_notes_at(&s, 0, 2, collect, &g) == 1 && g.ev[0].note == 64);   /* on the step: only tick 0 */
+    g.n = 0;
+    CHECK(song_notes_at_tick(&s, 0, 2, 4, tn, &g) == 1 && g.ev[0].note == 60 && g.ev[0].tick == 4);
+    CHECK(riff_notes_at(&s, 0, 1, 2, 3, tn, &g) == 0);
+    CHECK(riff_note_del(&s, 0, 1, 2, 60) == 0 && riff_note_del_at(&s, 0, 1, 2, 4, 60) == 1 && consistent(&s));
+    riff_note_put(&s, 0, 1, 15, 3, 2, 72, 80);
+    s.riff[0][0].quant = 6;
+    CHECK(riff_copy(&s, 0, 1, 2) == 0 && s.riff[0][1].quant == 6 && s.ev[s.riff[0][1].first + 1u].tick == 3);
+    n = song_pack(&s, buf, sizeof buf);
+    CHECK(n > 0 && song_unpack(&s2, buf, n) == 0 && memcmp(&s, &s2, sizeof s) == 0);
+    /* a version 1 song (no quant, no ticks) still loads: written here by hand from the version 2 bytes */
+    {
+        static uint8_t v1[SONG_PACK_MAX];
+        uint32_t at = 0, m = 0, t, r, crc;
+        song_init(&s);
+        riff_new(&s, 1, 3, 32);
+        riff_note_set(&s, 1, 3, 5, 2, 50, 70);
+        riff_note_set(&s, 1, 3, 9, 1, 52, 71);
+        song_place(&s, 4, 1, 3);
+        n = song_pack(&s, buf, sizeof buf);
+        for (i = 0; i < 4u; i++) v1[m++] = buf[at++];
+        v1[m++] = 1; at++;
+        for (i = 0; i < SONG_NAME + 5u + SONG_TRACKS * 5u; i++) v1[m++] = buf[at++];
+        for (t = 0; t < SONG_TRACKS; t++)
+            for (r = 0; r < SONG_RIFFS; r++) {
+                uint8_t st = buf[at++];
+                v1[m++] = st;
+                if (!st) continue;
+                v1[m++] = buf[at++]; at++;          /* colour; quant dropped */
+                for (k = 0; k < 2u + RIFF_NAME; k++) v1[m++] = buf[at++];
+            }
+        for (i = 0; i < SONG_BARS * SONG_TRACKS; i++) v1[m++] = buf[at++];
+        for (i = 0; i < s.nev; i++) { v1[m++] = buf[at++]; at++; for (k = 0; k < 3u; k++) v1[m++] = buf[at++]; }
+        crc = song_crc32(v1, m);
+        for (k = 0; k < 4u; k++) v1[m++] = (uint8_t)(crc >> (8u * k));
+        CHECK(song_unpack(&s2, v1, m) == 0 && memcmp(&s, &s2, sizeof s) == 0);
+    }
+}
+
 static void test_move(void)
 {
     /* track 0: A (riff 1, 2 bars) at 2, B (riff 2, 1 bar) at 4, C (riff 3, 4 bars) at 8 */
@@ -252,6 +308,7 @@ int main(void)
     test_move();
     test_repeat();
     test_pack();
+    test_ticks();
     printf("song: %d of %d checks failed\n", fails, checks);
     return fails != 0;
 }

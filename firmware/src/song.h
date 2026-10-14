@@ -13,7 +13,8 @@
  *                           a riff's notes are song.ev[first .. first + count)
  *
  * Notes are polyphonic (chords are notes with the same start) and have a length in steps, so a riff is a small
- * piano roll, not a step pattern. The pool is shared: one long busy riff and many short ones fit the same space.
+ * piano roll, not a step pattern. A note may start between two steps: tick says where, in sixths of a step (so
+ * triplets and 1/32 fit: SONG_TPS ticks a step, 96 a bar); notes put in by hand start on a step (tick 0). The pool is shared: one long busy riff and many short ones fit the same space.
  *
  * Sizes: 4 tracks x 32 riffs, 128 bars, 4096 notes: about 18.5 KB in RAM, a few KB packed (song_pack). */
 #ifndef FM2000_SONG_H
@@ -28,9 +29,16 @@
 #define SONG_EVENTS 4096u               /* notes in all riffs together */
 #define SONG_NAME 8u
 #define RIFF_NAME 6u
+#define SONG_TPS 6u                     /* ticks a step: 1/16 = 6, 1/16 triplet = 4, 1/32 = 3 */
+
+/* a riff's quantise (recording): the grid in ticks, 1/2 1/4 1/4T 1/8 1/8T 1/16 1/16T 1/32 */
+#define RIFF_QUANTS 8u
+#define RIFF_Q_16 5u                    /* the default: 1/16 */
+static const uint8_t RIFF_Q_TICKS[RIFF_QUANTS] = {48, 24, 16, 12, 8, 6, 4, 3};
 
 typedef struct {
     uint8_t start;                      /* 0..63: the step it starts on */
+    uint8_t tick;                       /* 0..5: and how far past it, in sixths of a step */
     uint8_t len;                        /* 1..64 steps (it may run past the riff's end: it is cut there) */
     uint8_t note;                       /* MIDI 0..127 */
     uint8_t vel;                        /* 1..127 */
@@ -40,6 +48,7 @@ typedef struct {
     uint16_t first, count;              /* its notes: ev[first .. first + count) (first is kept by song_reindex) */
     uint8_t steps;                      /* 1..64; 0 = the slot is unused */
     uint8_t color;                      /* 0..7, for the grid */
+    uint8_t quant;                      /* recording's grid: an index into RIFF_Q_TICKS */
     char name[RIFF_NAME];               /* not 0-terminated when full */
 } song_riff_t;
 
@@ -118,6 +127,7 @@ static song_riff_t *riff_new(song_t *s, uint32_t t, uint32_t r, uint32_t steps)
     if (!f->steps) {
         f->steps = (uint8_t)steps;
         f->color = (uint8_t)((r - 1u + 3u * t) & 7u);   /* neighbours differ, across tracks too */
+        f->quant = RIFF_Q_16;
         f->name[0] = 'R';
         f->name[1] = (char)('0' + r / 10u);
         f->name[2] = (char)('0' + r % 10u);
@@ -136,31 +146,35 @@ static uint32_t riff_free(const song_t *s, uint32_t t)
     return 0;
 }
 
-/* where in ev a note (start, note) is or would go in riff f: the index, *found = 1 if it is there */
-static uint32_t riff_find(const song_t *s, const song_riff_t *f, uint32_t start, uint32_t note, int *found)
+/* where in ev a note (start, tick, note) is or would go in riff f: the index, *found = 1 if it is there. Notes are
+ * kept in order of start, tick, note. */
+static uint32_t riff_find(const song_t *s, const song_riff_t *f, uint32_t start, uint32_t tick, uint32_t note, int *found)
 {
-    uint32_t i = f->first, end = (uint32_t)f->first + f->count;
+    uint32_t i = f->first, end = (uint32_t)f->first + f->count, at = start * SONG_TPS + tick;
     *found = 0;
     for (; i < end; i++) {
         const song_ev_t *e = &s->ev[i];
-        if (e->start > start || (e->start == start && e->note >= note)) {
-            *found = e->start == start && e->note == note;
+        uint32_t ea = e->start * SONG_TPS + e->tick;
+        if (ea > at || (ea == at && e->note >= note)) {
+            *found = ea == at && e->note == note;
             break;
         }
     }
     return i;
 }
 
-/* put a note into a riff (an existing note on the same step and pitch is replaced): its index, or -1 when the
+/* put a note into a riff (an existing note at the same place and pitch is replaced): its index, or -1 when the
  * riff does not exist, the values are out of range or the pool is full */
-static int32_t riff_note_set(song_t *s, uint32_t t, uint32_t r, uint32_t start, uint32_t len, uint32_t note, uint32_t vel)
+static int32_t riff_note_put(song_t *s, uint32_t t, uint32_t r, uint32_t start, uint32_t tick, uint32_t len,
+                             uint32_t note, uint32_t vel)
 {
     song_riff_t *f = song_riff(s, t, r);
     uint32_t i;
     int found;
-    if (!f || !f->steps || start >= f->steps || len < 1u || len > RIFF_MAX_STEPS || note > 127u || vel < 1u || vel > 127u)
+    if (!f || !f->steps || start >= f->steps || tick >= SONG_TPS || len < 1u || len > RIFF_MAX_STEPS || note > 127u ||
+        vel < 1u || vel > 127u)
         return -1;
-    i = riff_find(s, f, start, note, &found);
+    i = riff_find(s, f, start, tick, note, &found);
     if (!found) {
         if (s->nev >= SONG_EVENTS) return -1;
         song_bytes_move(&s->ev[i + 1u], &s->ev[i], (s->nev - i) * sizeof(song_ev_t));
@@ -169,26 +183,35 @@ static int32_t riff_note_set(song_t *s, uint32_t t, uint32_t r, uint32_t start, 
         song_reindex(s);
     }
     s->ev[i].start = (uint8_t)start;
+    s->ev[i].tick = (uint8_t)tick;
     s->ev[i].len = (uint8_t)len;
     s->ev[i].note = (uint8_t)note;
     s->ev[i].vel = (uint8_t)vel;
     return (int32_t)i;
 }
+static int32_t riff_note_set(song_t *s, uint32_t t, uint32_t r, uint32_t start, uint32_t len, uint32_t note, uint32_t vel)
+{
+    return riff_note_put(s, t, r, start, 0, len, note, vel);   /* on the step */
+}
 
-/* take the note (start, note) out of a riff: 1 if it was there */
-static int riff_note_del(song_t *s, uint32_t t, uint32_t r, uint32_t start, uint32_t note)
+/* take the note (start, tick, note) out of a riff: 1 if it was there */
+static int riff_note_del_at(song_t *s, uint32_t t, uint32_t r, uint32_t start, uint32_t tick, uint32_t note)
 {
     song_riff_t *f = song_riff(s, t, r);
     uint32_t i;
     int found;
     if (!f) return 0;
-    i = riff_find(s, f, start, note, &found);
+    i = riff_find(s, f, start, tick, note, &found);
     if (!found) return 0;
     song_bytes_move(&s->ev[i], &s->ev[i + 1u], (s->nev - i - 1u) * sizeof(song_ev_t));
     s->nev--;
     f->count--;
     song_reindex(s);
     return 1;
+}
+static int riff_note_del(song_t *s, uint32_t t, uint32_t r, uint32_t start, uint32_t note)
+{
+    return riff_note_del_at(s, t, r, start, 0, note);
 }
 
 /* the notes of a riff removed (the riff stays, with its length) */
@@ -226,7 +249,7 @@ static int riff_set_steps(song_t *s, uint32_t t, uint32_t r, uint32_t steps)
     for (i = f->first + f->count; i-- > f->first;) {
         song_ev_t *e = &s->ev[i];
         if (e->start >= steps)
-            riff_note_del(s, t, r, e->start, e->note);
+            riff_note_del_at(s, t, r, e->start, e->tick, e->note);
         else if (e->start + e->len > steps)
             e->len = (uint8_t)(steps - e->start);
     }
@@ -244,9 +267,10 @@ static int riff_copy(song_t *s, uint32_t t, uint32_t src, uint32_t dst)
     riff_clear(s, t, dst);
     b->steps = a->steps;
     b->color = a->color;
+    b->quant = a->quant;
     for (i = 0; i < n; i++) {                   /* a may move as b grows: read it by index each time */
         song_ev_t e = s->ev[a->first + i];
-        riff_note_set(s, t, dst, e.start, e.len, e.note, e.vel);
+        riff_note_put(s, t, dst, e.start, e.tick, e.len, e.note, e.vel);
     }
     return 0;
 }
@@ -418,20 +442,16 @@ static void song_delete_bar(song_t *s, uint32_t bar)
  * each; a note's length is cut where its riff ends. Returns how many. Safe to call from the audio interrupt as
  * long as the main loop does not edit the song meanwhile (the app pauses edits or accepts a wrong note then). */
 typedef void (*song_note_fn)(void *ctx, uint32_t track, const song_ev_t *ev);
-static uint32_t song_notes_at(const song_t *s, uint32_t track, uint32_t step, song_note_fn on, void *ctx)
+/* the notes riff r of track t starts at step off, tick `tick` of itself */
+static uint32_t riff_notes_at(const song_t *s, uint32_t track, uint32_t r, uint32_t off, uint32_t tick, song_note_fn on, void *ctx)
 {
-    uint32_t bar = step / STEPS_PER_BAR, bar0 = 0, r, off, i, end, n = 0;
-    const song_riff_t *f;
-    if (s->track[track].flags & SONG_MUTE) return 0;
-    r = song_at(s, bar, track, &bar0);
-    if (!r) return 0;
-    f = &s->riff[track][r - 1u];
-    off = step - bar0 * STEPS_PER_BAR;
+    const song_riff_t *f = &s->riff[track][r - 1u];
+    uint32_t i, end, n = 0;
     if (off >= f->steps) return 0;
     for (i = f->first, end = (uint32_t)f->first + f->count; i < end; i++) {
         const song_ev_t *e = &s->ev[i];
-        if (e->start > off) break;              /* (in order of start) */
-        if (e->start == off) {
+        if (e->start > off || (e->start == off && e->tick > tick)) break;   /* (in order of start, tick) */
+        if (e->start == off && e->tick == tick) {
             song_ev_t c = *e;
             if (c.start + c.len > f->steps) c.len = (uint8_t)(f->steps - c.start);
             on(ctx, track, &c);
@@ -440,19 +460,32 @@ static uint32_t song_notes_at(const song_t *s, uint32_t track, uint32_t step, so
     }
     return n;
 }
+static uint32_t song_notes_at_tick(const song_t *s, uint32_t track, uint32_t step, uint32_t tick, song_note_fn on, void *ctx)
+{
+    uint32_t bar = step / STEPS_PER_BAR, bar0 = 0, r;
+    if (s->track[track].flags & SONG_MUTE) return 0;
+    r = song_at(s, bar, track, &bar0);
+    if (!r) return 0;
+    return riff_notes_at(s, track, r, step - bar0 * STEPS_PER_BAR, tick, on, ctx);
+}
+static uint32_t song_notes_at(const song_t *s, uint32_t track, uint32_t step, song_note_fn on, void *ctx)
+{
+    return song_notes_at_tick(s, track, step, 0, on, ctx);   /* the notes on the step itself */
+}
 
 /* ------------------------------------------------------------------ saving */
 /* The packed song, for the flash or a file: little-endian, only what is used.
  *   "F2KS" ver(1) name[8] bpm10(2) swing loop_start loop_end
  *   tracks: engine inst vol pan flags     x4
- *   riffs:  steps color count(2) name[6]  x4x32  (steps 0: unused, nothing else follows)
+ *   riffs:  steps color quant count(2) name[6]  x4x32  (steps 0: unused, nothing else follows)
  *   cells:  128 x 4
- *   notes:  start len note vel            x nev (riff by riff, as counted above)
- *   crc32 of everything before it (4) */
+ *   notes:  start tick len note vel             x nev (riff by riff, as counted above)
+ *   crc32 of everything before it (4)
+ * Version 1 had no quant and no tick: it still loads (1/16, on the steps). */
 #define SONG_MAGIC "F2KS"
-#define SONG_VERSION 1u
-#define SONG_PACK_MAX (4u + 1u + SONG_NAME + 5u + SONG_TRACKS * 5u + SONG_TRACKS * SONG_RIFFS * 10u + \
-                       SONG_BARS * SONG_TRACKS + SONG_EVENTS * 4u + 4u)
+#define SONG_VERSION 2u
+#define SONG_PACK_MAX (4u + 1u + SONG_NAME + 5u + SONG_TRACKS * 5u + SONG_TRACKS * SONG_RIFFS * 11u + \
+                       SONG_BARS * SONG_TRACKS + SONG_EVENTS * 5u + 4u)
 
 static uint32_t song_crc32(const uint8_t *p, uint32_t n)
 {
@@ -479,12 +512,12 @@ static uint32_t song_pack(const song_t *s, uint8_t *out, uint32_t max)
             const song_riff_t *f = &s->riff[t][r];
             PUT(f->steps);
             if (!f->steps) continue;
-            PUT(f->color); PUT(f->count); PUT(f->count >> 8);
+            PUT(f->color); PUT(f->quant); PUT(f->count); PUT(f->count >> 8);
             for (i = 0; i < RIFF_NAME; i++) PUT(f->name[i]);
         }
     for (i = 0; i < SONG_BARS; i++)
         for (t = 0; t < SONG_TRACKS; t++) PUT(s->cell[i][t]);
-    for (i = 0; i < s->nev; i++) { PUT(s->ev[i].start); PUT(s->ev[i].len); PUT(s->ev[i].note); PUT(s->ev[i].vel); }
+    for (i = 0; i < s->nev; i++) { PUT(s->ev[i].start); PUT(s->ev[i].tick); PUT(s->ev[i].len); PUT(s->ev[i].note); PUT(s->ev[i].vel); }
     crc = song_crc32(out, n);
     PUT(crc); PUT(crc >> 8); PUT(crc >> 16); PUT(crc >> 24);
 #undef PUT
@@ -494,10 +527,11 @@ static uint32_t song_pack(const song_t *s, uint8_t *out, uint32_t max)
 /* 0 = loaded; -1 not a song, -2 broken (CRC), -3 a newer version, -4 inconsistent. On an error s is left empty. */
 static int song_unpack(song_t *s, const uint8_t *in, uint32_t n)
 {
-    uint32_t t, r, i, at = 0, total = 0, crc;
+    uint32_t t, r, i, at = 0, total = 0, crc, ver;
 #define GET(v) do { if (at >= n) goto bad; (v) = in[at++]; } while (0)
     if (n < 9u || in[0] != 'F' || in[1] != '2' || in[2] != 'K' || in[3] != 'S') { song_init(s); return -1; }
     if (in[4] > SONG_VERSION) { song_init(s); return -3; }
+    ver = in[4];
     song_bytes_set(s, 0, sizeof *s);
     at = 5;
     for (i = 0; i < SONG_NAME; i++) GET(s->name[i]);
@@ -511,7 +545,10 @@ static int song_unpack(song_t *s, const uint8_t *in, uint32_t n)
             GET(f->steps);
             if (!f->steps) continue;
             if (f->steps > RIFF_MAX_STEPS) goto bad;
-            GET(f->color); GET(lo); GET(hi);
+            GET(f->color);
+            if (ver >= 2u) { GET(f->quant); if (f->quant >= RIFF_QUANTS) goto bad; }
+            else f->quant = RIFF_Q_16;
+            GET(lo); GET(hi);
             f->count = (uint16_t)(lo | hi << 8);
             total += f->count;
             for (i = 0; i < RIFF_NAME; i++) GET(f->name[i]);
@@ -523,7 +560,11 @@ static int song_unpack(song_t *s, const uint8_t *in, uint32_t n)
             if (s->cell[i][t] > SONG_RIFFS) goto bad;
         }
     s->nev = (uint16_t)total;
-    for (i = 0; i < total; i++) { GET(s->ev[i].start); GET(s->ev[i].len); GET(s->ev[i].note); GET(s->ev[i].vel); }
+    for (i = 0; i < total; i++) {
+        GET(s->ev[i].start);
+        if (ver >= 2u) { GET(s->ev[i].tick); if (s->ev[i].tick >= SONG_TPS) goto bad; }
+        GET(s->ev[i].len); GET(s->ev[i].note); GET(s->ev[i].vel);
+    }
     if (at + 4u > n) goto bad;
     crc = (uint32_t)in[at] | (uint32_t)in[at + 1u] << 8 | (uint32_t)in[at + 2u] << 16 | (uint32_t)in[at + 3u] << 24;
     if (crc != song_crc32(in, at)) { song_init(s); return -2; }

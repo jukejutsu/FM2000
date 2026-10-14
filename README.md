@@ -74,6 +74,15 @@ SEQ on a riff opens its piano roll; HOME or SEQ goes back. Time across, pitch up
 | KNOB 2 | move the note up / down | P, Shift P |
 | KNOB 3 | the note's length | A, G |
 | KNOB 4 | zoom: 8 / 16 / 32 / 64 steps in view | K, Shift K |
+| REC | record (see below); again: rehearsal, again: record | = |
+| PLAY | stop recording | Space |
+
+Recording: REC on RIF plays the riff alone, round and round from its start, and the keys (or MIDI on the riff's
+channel) write onto it as you play. A note goes to the nearest place on the riff's quantise grid (EDT), its length is
+how long the key is held. Each time round new notes go on over the old ones: the same note at the same place is
+replaced. REC again is rehearsal: the riff keeps looping, the keys play but write nothing, and REC blinks; REC once
+more goes back to recording. PLAY or another screen stops it. (A count-in of 1 or 2 bars comes with the metronome's
+settings.)
 
 ## A riff's settings (EDT screen)
 
@@ -83,6 +92,7 @@ row, KNOB 1 changes the value.
 | Tab | Setting | Values |
 | --- | --- | --- |
 | RIFF | LENGTH | 1 to 64 steps (notes past a shorter end go, notes running past it are cut) |
+| RIFF | QUANTIZE | the recording grid: 1/2, 1/4, 1/4T, 1/8, 1/8T, 1/16, 1/16T, 1/32 (T: triplets) |
 | NOTE (with a note at the cursor) | VELOCITY | 1 to 127, sounded as it changes |
 
 On ARR a riff that does not fill its last bar (12 steps, 24 steps) is drawn as long as it is: the rest of the bar
