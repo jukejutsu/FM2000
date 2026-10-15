@@ -413,6 +413,9 @@ static void test_song(void)                     /* a chiptune at 140: Am F C G, 
         song_place(&song, PLACE[i][0], PLACE[i][1], PLACE[i][2]);
 }
 
+#ifndef HL_STYLE
+#define HL_STYLE 2                              /* the chosen track: 1 an LED on its tab, 2 the tab lit as a display (being decided) */
+#endif
 /* ================================================================== the design system (docs: the FM2K design system page)
  * Music 2000's look, made for 240 x 240: a navy ground with broad faint diagonal bands; content in WELLS (recessed:
  * dark edge top-left, lit edge bottom-right); controls and chrome on METAL (raised: a grey gradient, lit edge on
@@ -445,6 +448,7 @@ static void test_song(void)                     /* a chiptune at 140: Am F C G, 
 #define C_LCD_INK RGB(233, 238, 255)
 #define C_LED RGB(255, 59, 48)
 #define C_LED_BG RGB(20, 4, 10)
+#define C_LED_OFF RGB(36, 44, 76)               /* an unlit icon or LED in a display */
 /* content */
 #define C_RIFF_TOP RGB(95, 219, 116)            /* a riff: its lit edge, its body, its shade, its notes */
 #define C_RIFF RGB(45, 170, 74)
@@ -741,8 +745,9 @@ static void draw_head(const char *screen)
         const char *const *ic[4] = {ICON_PLAY, ICON_REC, ICON_LOOP, ICON_METRO};
         uint16_t on[4] = {seq_play ? C_PLAY : 0, rec_lit() ? C_RED : 0, song.loop_end > song.loop_start ? C_ACC : 0,
                           seq_click ? C_ACC : 0};
-        x = 98;
-        for (i = 0; i < 4u; i++) x += cv_icon(x, 7, ic[i], 7, on[i] ? on[i] : C_INK_SOFT) + 6;
+        display(88, 3, 64, 16, C_LCD);           /* lit in a black display: colour never sits on the metal */
+        x = 95;
+        for (i = 0; i < 4u; i++) x += cv_icon(x, 7, ic[i], 7, on[i] ? on[i] : C_LED_OFF) + 6;
     }
     n = put_dec(bpm, song.bpm10 / 10u);         /* the tempo: "145", "145.5" */
     if (song.bpm10 % 10u) { bpm[n++] = '.'; bpm[n++] = (char)('0' + song.bpm10 % 10u); }
@@ -904,7 +909,21 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track: its tab, its ce
         if (sel) metal_pressed(2, ly + 1, GX - 4, LANE_H - 2, C_WELL);
         else metal(2, ly + 1, GX - 4, LANE_H - 2, C_WELL);
         lab[0] = '0'; lab[1] = (char)('1' + t); lab[2] = 0;
-        txt(6, ly + 4, &FONT_M, lab, sel ? C_ACC : C_INK);
+#if HL_STYLE == 2
+        if (sel) {                              /* B: the chosen tab turns into a lit display */
+            well(2, ly + 1, GX - 4, LANE_H - 2, C_LCD, C_WELL, C_METAL_SHADE, C_METAL_LIT);
+            cv_rect(3, ly + 4, 2, LANE_H - 8, C_ACC);
+            txt(7, ly + 4, &FONT_M, lab, C_TXT);
+        } else
+#endif
+        txt(6, ly + 4, &FONT_M, lab, C_INK);
+#if HL_STYLE != 2
+        if (sel) {                              /* A: an LED on the tab, lit */
+            well(GX - 13, ly + 6, 9, 7, C_LCD, C_METAL_BOT, C_METAL_SHADE, C_METAL_LIT);
+            cv_rect(GX - 12, ly + 7, 7, 5, C_ACC);
+            cv_rect(GX - 11, ly + 8, 3, 1, mix565(C_ACC, C_TXT, 8));
+        }
+#endif
         well(5, ly + 22, GX - 10, 15, C_LCD, sel ? C_METAL_BOT : C_METAL_BOT, C_METAL_SHADE, C_METAL_LIT);
         if (sel && nw > x1 - x0) {              /* scrolls: a second still at the start, then a pixel every 60 ms */
             uint32_t el = fm1_ms - ui.marq_t0, loop = (uint32_t)nw + 12u;
@@ -1592,8 +1611,9 @@ static void paint_edt(void)
         int32_t x = 4 + (int32_t)tb * 80, on = tb == edt.tab, off = tb == TAB_NOTE && !has_note;
         if (on) metal_pressed(x, EDT_TAB_Y, 76, 22, C_BG);
         else metal(x, EDT_TAB_Y, 76, 22, C_BG);
-        cv_rect(x + 8, EDT_TAB_Y + 9, 6, 4, on ? C_ACC : C_INK_SOFT);   /* the key's LED */
-        if (on) cv_rect(x + 7, EDT_TAB_Y + 8, 8, 1, mix565(C_ACC, C_TXT, 6));
+        well(x + 6, EDT_TAB_Y + 7, 10, 8, C_LCD, C_METAL_TOP, C_METAL_SHADE, C_METAL_LIT);   /* the key's LED */
+        cv_rect(x + 7, EDT_TAB_Y + 8, 8, 6, on ? C_ACC : C_LED_OFF);
+        if (on) cv_rect(x + 8, EDT_TAB_Y + 9, 4, 1, mix565(C_ACC, C_TXT, 8));
         txt(x + 20, EDT_TAB_Y + 5, &FONT_S, EDT_TAB[tb], off ? C_INK_SOFT : C_INK);
     }
     for (r = 0; r < EDT_ROWS[edt.tab]; r++) {
