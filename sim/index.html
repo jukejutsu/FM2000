@@ -137,6 +137,24 @@ const knobs = [], buttons = [], keys = [];
 const btnBy = new Map(), keyBy = new Map();
 const send = (m) => { if (node) node.port.postMessage(m); };
 
+// the screen, pixel-perfect: a whole number of device pixels per screen pixel, on the device-pixel grid, centred in
+// the window the panel draws (a fractional scale would make some pixels a pixel wider than others)
+function fitScreen() {
+  if (!layout) return;
+  const L = LAYOUTS[layout], [sx, sy, ss] = L.screen, inset = ss / 32, r = device.getBoundingClientRect();
+  if (!r.width) return;
+  const u = r.width / L.w, dpr = window.devicePixelRatio || 1;
+  const bx = (sx + inset) * u, by = (sy + inset) * u, bs = (ss - 2 * inset) * u;
+  let k = Math.max(1, Math.round(bs * dpr / 240));                 // the nearest whole scale ...
+  if (k * 240 / dpr > ss * u && k > 1) k--;                          // ... as long as it stays inside the screen's glass
+  const size = k * 240 / dpr;
+  const snap = (v, o) => Math.round((o + v) * dpr) / dpr - o;   // onto the device-pixel grid of the page
+  Object.assign(canvas.style, { left: `${snap(bx + (bs - size) / 2, r.left)}px`, top: `${snap(by + (bs - size) / 2, r.top)}px`,
+                                width: `${size}px`, height: `${size}px` });
+}
+new ResizeObserver(fitScreen).observe(document.body);
+addEventListener("resize", fitScreen);
+addEventListener("scroll", fitScreen, { passive: true });
 function build(name) {
   const L = LAYOUTS[name];
   layout = name;
@@ -149,9 +167,7 @@ function build(name) {
   for (const [x, y, w, h] of L.trays) el("rect", { x, y, width: w, height: h, rx: 14, fill: "var(--tray)" });
   const [sx, sy, ss] = L.screen;
   el("rect", { x: sx, y: sy, width: ss, height: ss, rx: 18, fill: "#0b0b0c" });
-  const inset = ss / 32;
-  Object.assign(canvas.style, { left: `${(sx + inset) / L.w * 100}%`, top: `${(sy + inset) / L.h * 100}%`,
-                                width: `${(ss - 2 * inset) / L.w * 100}%`, height: `${(ss - 2 * inset) / L.h * 100}%` });
+  fitScreen();
   KNOBS.forEach((n, i) => {
     const [x, y, r] = L.knobs[i], g = el("g", {});
     el("circle", { cx: x, cy: y, r: r + 5, fill: "var(--tray)" }, g);
