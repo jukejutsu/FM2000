@@ -498,7 +498,42 @@ static void strip_begin(uint32_t sy, uint32_t h)
     strip_y = sy;
     ground(0, (int32_t)sy, 240, (int32_t)h);
 }
-static void strip_end(void) { cv_oy = 0; cv_blit(0, strip_y); }
+/* the CRT: what goes to the screen passes through it, as a picture on a tube would: every other line darker
+ * (scanlines), the columns tinted red, green, blue in turn (an aperture grille), the edges and corners dimmer
+ * (the tube's curve), all a little brighter to make up for it. crt_on: on / off (the settings, later). */
+static uint32_t crt_on = 1;
+static uint16_t crt_row[240], crt_col[240];     /* brightness, 256 = as drawn */
+static void crt_init(void)
+{
+    uint32_t i;
+    for (i = 0; i < 240u; i++) {                /* 1 - d^2 / 3 across the screen (d: 0 at the middle, 1 at an edge) */
+        int32_t d = (int32_t)i * 2 - 239, v = 256 - d * d * 64 / (239 * 239);
+        crt_col[i] = (uint16_t)(v * 288 / 256);                 /* (288: the light the mask takes, given back) */
+        crt_row[i] = (uint16_t)(i & 1u ? v * 13 / 16 : v);      /* the odd lines: a scanline */
+    }
+}
+static void crt(uint16_t *px, uint32_t x0, uint32_t y0, uint32_t w, uint32_t h)   /* px: as cv_px holds it (swapped) */
+{
+    static const uint8_t MASK[3][3] = {{16, 13, 13}, {13, 16, 13}, {13, 13, 16}};   /* r g b, sixteenths, by x % 3 */
+    uint32_t i, j;
+    if (!crt_on) return;
+    if (!crt_col[120]) crt_init();
+    for (j = 0; j < h; j++) {
+        uint32_t rv = crt_row[(y0 + j) % 240u];
+        uint16_t *p = px + j * w;
+        for (i = 0; i < w; i++) {
+            uint32_t x = x0 + i, c = swap16(p[i]), v = rv * crt_col[x % 240u] >> 8;
+            const uint8_t *m = MASK[x % 3u];
+            uint32_t r = (c >> 11) * v * m[0] >> 12, g = ((c >> 5) & 63u) * v * m[1] >> 12, b = (c & 31u) * v * m[2] >> 12;
+            if (r > 31u) r = 31u;
+            if (g > 63u) g = 63u;
+            if (b > 31u) b = 31u;
+            p[i] = swap16(r << 11 | g << 5 | b);
+        }
+    }
+}
+static void cv_blit_crt(uint32_t x, uint32_t y) { crt(cv_px, x, y, cv_w, cv_h); cv_blit(x, y); }
+static void strip_end(void) { cv_oy = 0; cv_blit_crt(0, strip_y); }
 static void strip_begin_flat(uint32_t sy, uint32_t h)   /* a strip something covers whole (no ground under it) */
 {
     cv_oy = 0;
@@ -946,6 +981,7 @@ static void draw_lane_cols(uint32_t t, uint32_t pos, int32_t x0, int32_t w)
     if (w <= 0 || w > 64) return;
     for (r = 0; r < cv_h; r++)
         for (i = 0; i < (uint32_t)w; i++) colbuf[r * (uint32_t)w + i] = cv_px[r * cv_w + (uint32_t)x0 + i];
+    crt(colbuf, (uint32_t)x0, LANE_Y + t * LANE_H, (uint32_t)w, cv_h);
     lcd_blit((uint32_t)x0, LANE_Y + t * LANE_H, (uint32_t)w, cv_h, colbuf);
     ph_only = 0;
 }
@@ -973,7 +1009,7 @@ static void draw_foot_knobs(const char *k1, const char *k2, const char *k3, cons
         }
     strip_end();
 }
-static void draw_foot(void) { draw_foot_knobs("MOVE", "REPS", "LOOP", "ZOOM"); }
+static void draw_foot(void) { draw_foot_knobs("GRAB", "REPS", "LOOP", "ZOOM"); }
 
 /* ================================================================== the main loop */
 static void say(const char *s)                  /* a message in the footer for 1.5 s */
@@ -1079,7 +1115,7 @@ static void draw_splash(const char *title, const char *sub, uint16_t ink)
         display(76, 52, 104, 8, C_LCD);
         cv_rect(77, 53, 102 * splash_prog / 16, 6, ink);
     }
-    cv_blit(SPLASH_X, SPLASH_Y);
+    cv_blit_crt(SPLASH_X, SPLASH_Y);
     splash.on = 1;
     splash_icon = ICON_DISK;                    /* (the disk, no bar, unless the next caller says otherwise) */
     splash_prog = -1;
@@ -1560,7 +1596,7 @@ static void draw_rif_foot(void)
     int32_t i = rif_note_here();
     if (i >= 0) k3[copy_str(k3, "LEN ", 5) + put_dec(k3 + 4, song.ev[i].len)] = 0;
     else copy_str(k3, "LEN", 4);
-    draw_foot_knobs("MOVE", "PITCH", k3, ZOOM_NAME[rif.zoom] + 5);
+    draw_foot_knobs("GRAB", "PITCH", k3, ZOOM_NAME[rif.zoom] + 5);
 }
 static void draw_rif(void) { paint_body(paint_rif); }
 

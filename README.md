@@ -50,7 +50,7 @@ Most FM-1 firmwares are grooveboxes: patterns, loops, live play. FM2K is for wri
 | ALGORITHM | the track | ↑ ↓ |
 | SELECT | the bar | ← → |
 | PRESETS | the track's sound, or the drum kit on track 4 | Shift ↑ ↓ |
-| KNOB 1 | move the riff under the cursor a bar left / right; it trades places with a neighbour it runs into, both kept whole | Shift ← → |
+| KNOB 1 | grab the riff under the cursor a bar left / right; it trades places with a neighbour it runs into, both kept whole | Shift ← → |
 | KNOB 2 | repeats of the riff under the cursor: clockwise one more right after it (if it fits), anticlockwise one less | P, Shift P |
 | KNOB 3 | the loop: clockwise on (4 bars from the cursor) and longer, anticlockwise shorter down to off | G, A |
 | KNOB 4 | zoom 2x / 1x / 0.5x / 0.25x (4 to 32 bars): anticlockwise out, clockwise in from the cursor | K, Shift K |
@@ -71,7 +71,7 @@ EDIT on a riff opens its piano roll; HOME goes back. Time across, pitch up the s
 | SELECT / ALGORITHM | the cursor: the step / the note | ← → / ↑ ↓ |
 | OCT+ | a note in at the cursor (1 step); on a note: the note out | ] |
 | OCT− | undo: the riff's last change (16 deep); recording, all you played on the last time round | [ |
-| KNOB 1 | move the note along the steps | Shift ← → |
+| KNOB 1 | grab the note and move it along the steps | Shift ← → |
 | KNOB 2 | move the note up / down | P, Shift P |
 | KNOB 3 | the note's length | A, G |
 | KNOB 4 | zoom: 8 / 16 / 32 / 64 steps in view | K, Shift K |
