@@ -568,6 +568,15 @@ static void display(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t fill)  
     well(x, y, w, h, fill, C_METAL_TOP, C_METAL_SHADE, C_METAL_LIT);
 }
 static int32_t txt(int32_t x, int32_t y, const felucca_font_t *f, const char *s, uint16_t c);
+/* an LED: 5 x 5, a black socket and a 3 x 3 light in it, lit in the accent (a glint on its corner) or off */
+static void led(int32_t x, int32_t y, uint32_t on, uint16_t ground)
+{
+    (void)ground;
+    cv_rect(x, y, 5, 5, C_METAL_SHADE);
+    cv_rect(x + 1, y + 1, 3, 3, on ? C_ACC : C_LED_OFF);
+    if (on) cv_pset(x + 1, y + 1, mix565(C_ACC, C_TXT, 8));
+    cv_rect(x + 1, y + 5, 4, 1, C_METAL_LIT);   /* the socket's lit lower edge */
+}
 /* a knob's name ("K1"): flat, light letters in a small black display, so it reads as a label, not a knob */
 static int32_t knob_chip(int32_t x, int32_t y, uint32_t k, uint16_t ground)
 {
@@ -906,14 +915,8 @@ static void draw_lane(uint32_t t, uint32_t pos)    /* one track: its tab, its ce
         if (sel) metal_pressed(2, ly + 1, GX - 4, LANE_H - 2, C_WELL);
         else metal(2, ly + 1, GX - 4, LANE_H - 2, C_WELL);
         lab[0] = '0'; lab[1] = (char)('1' + t); lab[2] = 0;
-        txt(5, ly + 4, &FONT_M, lab, C_INK);
-        if (sel) {                              /* the chosen track: a small LED after its number, lit */
-            int32_t lx = 6 + text_w(&FONT_M, lab) + 2;
-            if (lx > GX - 9) lx = GX - 9;
-            well(lx, ly + 7, 6, 5, C_LCD, C_METAL_BOT, C_METAL_SHADE, C_METAL_LIT);
-            cv_rect(lx + 1, ly + 8, 4, 3, C_ACC);
-            cv_pset(lx + 1, ly + 8, mix565(C_ACC, C_TXT, 8));
-        }
+        txt(4, ly + 4, &FONT_M, lab, C_INK);
+        if (sel) led(GX - 10, ly + 7, 1, C_METAL_BOT);   /* the chosen track: a small LED, lit, 2 px in from the edge */
         well(5, ly + 22, GX - 10, 15, C_LCD, sel ? C_METAL_BOT : C_METAL_BOT, C_METAL_SHADE, C_METAL_LIT);
         if (sel && nw > x1 - x0) {              /* scrolls: a second still at the start, then a pixel every 60 ms */
             uint32_t el = fm1_ms - ui.marq_t0, loop = (uint32_t)nw + 12u;
@@ -1601,9 +1604,7 @@ static void paint_edt(void)
         int32_t x = 4 + (int32_t)tb * 80, on = tb == edt.tab, off = tb == TAB_NOTE && !has_note;
         if (on) metal_pressed(x, EDT_TAB_Y, 76, 22, C_BG);
         else metal(x, EDT_TAB_Y, 76, 22, C_BG);
-        well(x + 8, EDT_TAB_Y + 8, 6, 5, C_LCD, C_METAL_TOP, C_METAL_SHADE, C_METAL_LIT);   /* the key's LED */
-        cv_rect(x + 9, EDT_TAB_Y + 9, 4, 3, on ? C_ACC : C_LED_OFF);
-        if (on) cv_pset(x + 9, EDT_TAB_Y + 9, mix565(C_ACC, C_TXT, 8));
+        led(x + 9, EDT_TAB_Y + 8, (uint32_t)on, C_METAL_TOP);   /* the key's LED */
         txt(x + 20, EDT_TAB_Y + 5, &FONT_S, EDT_TAB[tb], off ? C_INK_SOFT : C_INK);
     }
     for (r = 0; r < EDT_ROWS[edt.tab]; r++) {
